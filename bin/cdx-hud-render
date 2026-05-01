@@ -98,8 +98,10 @@ detect_active_session() {
     fi
   done < <(find "$SESSIONS_DIR" -name "rollout-*.jsonl" -type f 2>/dev/null | sort | tail -10)
 
-  # If nothing fresh, fall back to the most recent rollout (ignoring cutoff)
-  if [ -z "$newest_uuid" ]; then
+  # If we have no wrapper context (no start epoch), fall back to the most recent
+  # rollout. With wrapper context, an empty result means "loading" — the caller
+  # will render a placeholder rather than show stale prior-session data.
+  if [ -z "$newest_uuid" ] && [ -z "${CDX_HUD_START_EPOCH:-}" ]; then
     local f
     f=$(find_latest_rollout)
     if [ -n "$f" ]; then
@@ -166,16 +168,25 @@ extract_state() {
     fi
   fi
 
+  # Loading state: wrapper launched us, but no rollout/snapshot has yet been
+  # written for the new session. We still want to surface cross-session rate
+  # limits, but per-session fields (model, context, session id) must not be
+  # taken from the prior session — show a "loading" placeholder instead.
+  local loading=0
+  if [ -n "${CDX_HUD_START_EPOCH:-}" ] && [ -z "$active_uuid" ]; then
+    loading=1
+  fi
+
   [ ${#files[@]} -eq 0 ] && {
-    # No data at all — emit just the active session id so the HUD still shows it.
     [ -n "$active_uuid" ] && printf 'META_ID=%s\n' "$active_uuid"
+    [ "$loading" = "1" ] && printf 'LOADING=1\n'
     return
   }
 
   local now
   now=$(date +%s)
 
-  cat "${files[@]}" 2>/dev/null | jq -rn --argjson now "$now" --arg active_id "$active_uuid" '
+  cat "${files[@]}" 2>/dev/null | jq -rn --argjson now "$now" --argjson loading "$loading" --arg active_id "$active_uuid" '
     # Threshold above which a stale-but-recent value is treated as "hit".
     90 as $hit_thresh
     | [inputs] as $items
@@ -252,17 +263,18 @@ extract_state() {
                               and (.rl_secondary_reset | tonumber? // 0) > $now
                              then 1 else 0 end)
     | .rl_secondary_stale = (if .rl_secondary_currently_null == 1 and .rl_secondary_hit == 0 and (.rl_secondary_pct | length) > 0 then 1 else 0 end)
-    # Override meta_id with the wrapper-detected active session if provided.
-    # When the active session has no rollout yet, this surfaces the correct UUID
-    # while per-session live fields stay at their default (zeroed) values.
-    | (if ($active_id // "") != "" then
-         (if .meta_id != $active_id then
-            # Different session than the last one we saw events for —
-            # zero per-session fields so we do not show stale numbers.
-            .meta_id = $active_id | .tok_ctx = 0 | .tok_session_total = 0
-            | .turn_model = "" | .turn_effort = "" | .turn_cwd = ""
-          else . end)
+    # Loading state: wipe per-session fields so we never display the prior
+    # session as if it were the current one. Rate-limit fields stay (account-wide).
+    | (if $loading == 1 then
+         .meta_id = "" | .tok_ctx = 0 | .tok_session_total = 0
+         | .turn_model = "" | .turn_effort = "" | .turn_cwd = ""
+       elif ($active_id // "") != "" and .meta_id != $active_id then
+         # Wrapper detected a session id different from the last we saw events
+         # for — zero per-session fields rather than show stale numbers.
+         .meta_id = $active_id | .tok_ctx = 0 | .tok_session_total = 0
+         | .turn_model = "" | .turn_effort = "" | .turn_cwd = ""
        else . end)
+    | . + {loading: $loading}
     | to_entries[] | "\(.key | ascii_upcase)=\(.value)"
   ' 2>/dev/null
 }
@@ -288,7 +300,7 @@ render_once() {
   RL_PRIMARY_CURRENTLY_NULL="" RL_PRIMARY_HIT="" RL_PRIMARY_STALE=""
   RL_SECONDARY_PCT="" RL_SECONDARY_RESET="" RL_SECONDARY_WIN=""
   RL_SECONDARY_CURRENTLY_NULL="" RL_SECONDARY_HIT="" RL_SECONDARY_STALE=""
-  RL_PLAN="" RL_LIMIT_ID=""
+  RL_PLAN="" RL_LIMIT_ID="" LOADING=""
   TURN_MODEL="" TURN_EFFORT="" TURN_CWD=""
 
   # Source the latest values: later lines overwrite earlier ones, so the most
@@ -298,21 +310,26 @@ render_once() {
     eval "$line"
   done < <(extract_state "$rollout")
 
-  local cwd="${TURN_CWD:-$META_CWD}"
-  local model="${TURN_MODEL:-?}"
+  local cwd="${TURN_CWD:-${META_CWD:-$PWD}}"
+  local model="${TURN_MODEL:-}"
   local effort="${TURN_EFFORT:-}"
   local session_id="$META_ID"
 
   # ── line 1 parts ─────────────────────────────────────────────────
   local line1=()
 
-  # model (Claude purple #a78bfa)
-  local model_label="$model"
-  [ -n "$effort" ] && model_label="$model_label ($effort)"
-  line1+=("$(printf '\033[38;2;167;139;250m%s\033[0m' "$model_label")")
+  if [ "$LOADING" = "1" ]; then
+    line1+=("$(printf '\033[38;2;167;139;250mCodex\033[0m')")
+    line1+=("$(printf '\033[90mLoading session…\033[0m')")
+  else
+    # model (Claude purple #a78bfa)
+    local model_label="${model:-?}"
+    [ -n "$effort" ] && model_label="$model_label ($effort)"
+    line1+=("$(printf '\033[38;2;167;139;250m%s\033[0m' "$model_label")")
+  fi
 
   # context % — based on last input tokens vs model context window
-  if [ -n "$TOK_CTX" ] && [ -n "$TOK_WINDOW" ] && [ "$TOK_WINDOW" -gt 0 ]; then
+  if [ "$LOADING" != "1" ] && [ -n "$TOK_CTX" ] && [ -n "$TOK_WINDOW" ] && [ "$TOK_WINDOW" -gt 0 ]; then
     local ctx_pct
     ctx_pct=$(awk "BEGIN { printf \"%.0f\", $TOK_CTX * 100 / $TOK_WINDOW }")
     local ctx_color
