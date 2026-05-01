@@ -691,20 +691,35 @@ codex_pane_gone() {
   ! tmux list-panes -t "$CDX_HUD_CODEX_PANE" >/dev/null 2>&1
 }
 
-# Terminal resize / zoom sends SIGWINCH. Tmux propagates it to this pane's
-# bash, which resizes the alt-screen — without an immediate redraw the HUD's
-# first line can scroll off and stay missing until the next tick (up to
-# REFRESH_INTERVAL seconds). Two-part response:
-#   - Set NEED_REDRAW so the loop skips the next sleep if WINCH arrived
-#     mid-render (signal handlers run between commands, so the kill below
-#     would no-op against an already-completed sleep).
-#   - kill the backgrounded sleep so an in-flight wait returns immediately.
+# Terminal resize / zoom sends SIGWINCH. Bash 3.2 defers signal-trap delivery
+# until the current builtin (read, wait) returns, and external sleep runs to
+# completion regardless. Solution: poll with short foreground sleeps and check
+# NEED_REDRAW between each — gives ≤200ms latency to react to a resize without
+# any backgrounded jobs (which would leak "Terminated: 15" job-control output).
 NEED_REDRAW=0
-on_winch() {
-  NEED_REDRAW=1
-  [ -n "${_SLEEP_PID:-}" ] && kill "$_SLEEP_PID" 2>/dev/null
+trap 'NEED_REDRAW=1' WINCH
+
+# How long to sleep between NEED_REDRAW checks. Bumped if a sleep fragment
+# is longer than the configured interval (loading mode at 1s polls once).
+POLL_STEP="${CDX_HUD_POLL_STEP:-0.2}"
+
+# Sleep up to $1 seconds, but bail out as soon as NEED_REDRAW flips to 1.
+# Implemented as a foreground loop of POLL_STEP sleeps so SIGWINCH is
+# observed at the next iteration instead of after a multi-second wait.
+interruptible_sleep() {
+  local total="$1"
+  awk "BEGIN { exit !($total > 0) }" 2>/dev/null || return 0
+  if awk "BEGIN { exit !($total <= $POLL_STEP) }" 2>/dev/null; then
+    sleep "$total"
+    return 0
+  fi
+  local remaining="$total"
+  while awk "BEGIN { exit !($remaining > 0) }" 2>/dev/null; do
+    [ "$NEED_REDRAW" = "1" ] && return 0
+    sleep "$POLL_STEP"
+    remaining=$(awk "BEGIN { printf \"%.3f\", $remaining - $POLL_STEP }")
+  done
 }
-trap on_winch WINCH
 
 while :; do
   NEED_REDRAW=0
@@ -715,16 +730,9 @@ while :; do
   if [ "$NEED_REDRAW" = "1" ]; then
     continue
   fi
-  # Background the sleep with both its own stderr and the parent shell's
-  # job-control output redirected. Without this, killing the sleep on WINCH
-  # made bash print "Terminated: 15  sleep <N>" on stderr (job-completion
-  # notification) — visible above the HUD until the next redraw.
   if [ "${LOADING:-0}" = "1" ]; then
-    { sleep "$LOADING_REFRESH" 2>/dev/null & } 2>/dev/null
+    interruptible_sleep "$LOADING_REFRESH"
   else
-    { sleep "$REFRESH_INTERVAL" 2>/dev/null & } 2>/dev/null
+    interruptible_sleep "$REFRESH_INTERVAL"
   fi
-  _SLEEP_PID=$!
-  { wait "$_SLEEP_PID"; } 2>/dev/null
-  _SLEEP_PID=""
 done
