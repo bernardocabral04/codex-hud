@@ -247,6 +247,11 @@ extract_state() {
   now=$(date +%s)
 
   cat "${files[@]}" 2>/dev/null | jq -rn --argjson now "$now" --argjson loading "$loading" --arg active_id "$active_uuid" '
+    # Coerce a resets_at value (number, ISO-8601 string, or null) to epoch seconds.
+    # Future Codex builds may emit ISO; current builds emit Unix seconds. Without
+    # this, an ISO string would silently parse as 0 and trigger the stale-wipe.
+    def to_epoch: (tonumber? // fromdateiso8601? // 0);
+
     # Threshold above which a stale-but-recent value is treated as "hit".
     90 as $hit_thresh
     | [inputs] as $items
@@ -286,7 +291,7 @@ extract_state() {
           # Primary: only overwrite last-known when fresh data exists
           | (if $r.payload.rate_limits.primary != null then
                .rl_primary_pct = ($r.payload.rate_limits.primary.used_percent // "" | tostring)
-               | .rl_primary_reset = ($r.payload.rate_limits.primary.resets_at // "" | tostring)
+               | .rl_primary_reset = (($r.payload.rate_limits.primary.resets_at | to_epoch) | tostring)
                | .rl_primary_win = ($r.payload.rate_limits.primary.window_minutes // "" | tostring)
                | .rl_primary_currently_null = 0
              else
@@ -295,7 +300,7 @@ extract_state() {
           # Secondary: same
           | (if $r.payload.rate_limits.secondary != null then
                .rl_secondary_pct = ($r.payload.rate_limits.secondary.used_percent // "" | tostring)
-               | .rl_secondary_reset = ($r.payload.rate_limits.secondary.resets_at // "" | tostring)
+               | .rl_secondary_reset = (($r.payload.rate_limits.secondary.resets_at | to_epoch) | tostring)
                | .rl_secondary_win = ($r.payload.rate_limits.secondary.window_minutes // "" | tostring)
                | .rl_secondary_currently_null = 0
              else
