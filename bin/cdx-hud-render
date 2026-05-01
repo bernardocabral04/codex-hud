@@ -168,12 +168,12 @@ extract_state() {
     fi
   fi
 
-  # Loading state: wrapper launched us, but no rollout/snapshot has yet been
-  # written for the new session. We still want to surface cross-session rate
-  # limits, but per-session fields (model, context, session id) must not be
-  # taken from the prior session — show a "loading" placeholder instead.
+  # Loading state: wrapper launched us, but the new session has no rollout
+  # JSONL yet (just a shell_snapshot or nothing at all). Per-session fields
+  # would otherwise either be blank ("?") or leak from prior sessions —
+  # display a clean "Loading Codex session…" placeholder instead.
   local loading=0
-  if [ -n "${CDX_HUD_START_EPOCH:-}" ] && [ -z "$active_uuid" ]; then
+  if [ -n "${CDX_HUD_START_EPOCH:-}" ] && [ -z "$active_rollout" ]; then
     loading=1
   fi
 
