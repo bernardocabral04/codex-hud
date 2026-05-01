@@ -319,8 +319,7 @@ render_once() {
   local line1=()
 
   if [ "$LOADING" = "1" ]; then
-    line1+=("$(printf '\033[38;2;167;139;250mCodex\033[0m')")
-    line1+=("$(printf '\033[90mLoading session…\033[0m')")
+    line1+=("$(printf '\033[38;2;167;139;250mLoading Codex session…\033[0m')")
   else
     # model (Claude purple #a78bfa)
     local model_label="${model:-?}"
@@ -339,8 +338,9 @@ render_once() {
     line1+=("$(printf '\033[%sm%s%% (~%s)\033[0m' "$ctx_color" "$ctx_pct" "$human")")
   fi
 
-  # rate limits
+  # rate limits (suppressed during loading — line 1 stays a single segment)
   local rate_parts=()
+  if [ "$LOADING" != "1" ]; then
   if [ "$RL_PRIMARY_HIT" = "1" ]; then
     local s="5h:100%"
     if [ -n "$RL_PRIMARY_RESET" ]; then
@@ -379,9 +379,10 @@ render_once() {
     for r in "${rate_parts[@]:1}"; do joined+=" $r"; done
     line1+=("$joined")
   fi
+  fi  # end LOADING != 1
 
-  # session id (dim grey)
-  if [ -n "$session_id" ]; then
+  # session id (dim grey) — hidden during loading
+  if [ "$LOADING" != "1" ] && [ -n "$session_id" ]; then
     line1+=("$(printf '\033[90m%s\033[0m' "$session_id")")
   fi
 
