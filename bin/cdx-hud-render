@@ -573,7 +573,7 @@ render_once() {
   if [ "$LOADING" != "1" ]; then
     if [ "${CDX_HUD_YOLO:-}" = "1" ] \
        || { [ "$TURN_APPROVAL" = "never" ] && [ "$TURN_SANDBOX" = "danger-full-access" ]; }; then
-      line3=$(printf '\033[1;91m▶▶ yolo mode on\033[0m')
+      line3=$(printf '\033[38;2;255;94;125m▶▶ yolo mode on\033[0m')
     fi
   fi
 
