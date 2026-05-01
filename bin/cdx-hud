@@ -33,20 +33,30 @@ start_epoch=$(date +%s)
 # If we're already inside tmux, just split and run codex in the current pane;
 # otherwise create a new tmux session and attach.
 if [ -n "${TMUX:-}" ]; then
+  # Capture the current pane (will host codex) so the HUD can watchdog it.
+  codex_pane=$(tmux display-message -p '#{pane_id}')
   # Split a HUD pane BELOW the current pane, then return focus to the original.
   hud_pane=$(tmux split-window -v -l "$HUD_HEIGHT" -P -F "#{pane_id}" \
-    "CDX_HUD_START_EPOCH=$start_epoch exec '$RENDER_BIN'")
+    "CDX_HUD_START_EPOCH=$start_epoch CDX_HUD_CODEX_PANE=$codex_pane exec '$RENDER_BIN'")
   tmux select-pane -U
-  exec bash -c "trap 'tmux kill-pane -t $hud_pane 2>/dev/null' EXIT; cd $cwd_q && $codex_full"
+  # EXIT trap (also INT/TERM/HUP) ensures kill-pane runs even if the shell
+  # itself receives SIGINT alongside codex on Ctrl+C.
+  exec bash -c "trap 'tmux kill-pane -t $hud_pane 2>/dev/null' EXIT INT TERM HUP; cd $cwd_q && $codex_full"
 fi
 
 session="${SESSION_PREFIX}-$$"
-# Main pane: codex (when codex exits, kill the whole session).
+# Main pane runs codex with an EXIT trap that kills the whole session no matter
+# how the shell terminates (clean exit, signal, error). Without the trap, a
+# bare `codex; tmux kill-session ...` chain would leak the HUD pane whenever
+# bash itself died from SIGINT before reaching the kill-session command.
 tmux new-session -d -s "$session" -x "$(tput cols)" -y "$(tput lines)" \
-  "cd $cwd_q && $codex_full; tmux kill-session -t $session"
+  "bash -c \"trap 'tmux kill-session -t $session 2>/dev/null' EXIT INT TERM HUP; cd $cwd_q && $codex_full\""
+# Capture the codex pane id (the only pane in the session right now) so the
+# HUD can detect when it disappears.
+codex_pane=$(tmux list-panes -t "$session" -F '#{pane_id}' | head -1)
 # Add HUD pane BELOW the codex pane.
 tmux split-window -v -t "$session" -l "$HUD_HEIGHT" \
-  "CDX_HUD_START_EPOCH=$start_epoch exec '$RENDER_BIN'"
+  "CDX_HUD_START_EPOCH=$start_epoch CDX_HUD_CODEX_PANE=$codex_pane exec '$RENDER_BIN'"
 # Focus codex (the upper pane).
 tmux select-pane -t "$session" -U
 tmux set-option -t "$session" status off >/dev/null 2>&1 || true

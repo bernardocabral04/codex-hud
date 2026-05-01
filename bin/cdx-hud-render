@@ -446,8 +446,20 @@ printf '\033[?1049h\033[?25l'
 # shows up promptly; back off to the normal interval once data arrives.
 LOADING_REFRESH="${CDX_HUD_LOADING_REFRESH:-0.3}"
 
+# Watchdog: if the wrapper told us which pane runs codex, self-terminate
+# the moment that pane disappears. Belt-and-suspenders to the wrapper's
+# EXIT trap so an orphaned HUD pane never traps the user's terminal.
+codex_pane_gone() {
+  [ -z "${CDX_HUD_CODEX_PANE:-}" ] && return 1
+  command -v tmux >/dev/null 2>&1 || return 1
+  ! tmux list-panes -a -F '#{pane_id}' 2>/dev/null | grep -qFx "$CDX_HUD_CODEX_PANE"
+}
+
 while :; do
   render_once
+  if codex_pane_gone; then
+    exit 0
+  fi
   if [ "${LOADING:-0}" = "1" ]; then
     sleep "$LOADING_REFRESH"
   else
