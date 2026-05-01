@@ -596,53 +596,50 @@ render_once() {
   local available=$((pane_width - 4))  # 2-space left margin + safety
   [ "$available" -lt 10 ] && available=10
 
-  # Strip ANSI escape sequences for visible-length measurement.
-  ansi_strip() {
-    printf '%s' "$1" | sed 's/\x1b\[[0-9;]*m//g'
+  # Visible-length measurement for ANSI-styled strings. Single sed call.
+  visible_len() {
+    local plain
+    plain=$(printf '%s' "$1" | sed 's/\x1b\[[0-9;]*m//g')
+    printf '%s' "${#plain}"
   }
 
-  # Greedy join: append each segment with " | " separator only if it still
-  # fits in the available width; stop at the first segment that overflows.
+  # Build a one-line join from the named-array elements, dropping trailing
+  # segments that would overflow $available. Result lands in $JOINED_LINE.
+  # (Using a single global out-var instead of printf -v + dynamic scope —
+  # avoids subtle shadowing issues with `local` declarations in callers.)
+  JOINED_LINE=""
   fit_join() {
-    local result="" stripped vlen plen=0 seg
+    JOINED_LINE=""
+    local total=0 plen=0 seg slen
     local first=1
-    local arrname=$1; shift
     for seg in "$@"; do
-      stripped=$(ansi_strip "$seg")
-      vlen=${#stripped}
+      slen=$(visible_len "$seg")
       if [ "$first" = "1" ]; then
         plen=0
       else
         plen=3  # " | "
       fi
-      local current_visible=0
-      if [ -n "$result" ]; then
-        local r_stripped
-        r_stripped=$(ansi_strip "$result")
-        current_visible=${#r_stripped}
-      fi
-      if [ $((current_visible + plen + vlen)) -le "$available" ]; then
-        if [ "$first" = "1" ]; then
-          result="$seg"
-          first=0
-        else
-          result+=$(printf ' \033[90m|\033[0m %s' "$seg")
-        fi
-      else
+      if [ $((total + plen + slen)) -gt "$available" ]; then
         break
       fi
+      if [ "$first" = "1" ]; then
+        JOINED_LINE="$seg"
+        first=0
+      else
+        JOINED_LINE+=$(printf ' \033[90m|\033[0m %s' "$seg")
+      fi
+      total=$((total + plen + slen))
     done
-    printf -v "$arrname" '%s' "$result"
   }
 
-  local lines=() joined1 joined2
+  local lines=()
   if [ ${#line1[@]} -gt 0 ]; then
-    fit_join joined1 "${line1[@]}"
-    lines+=("$joined1")
+    fit_join "${line1[@]}"
+    lines+=("$JOINED_LINE")
   fi
   if [ ${#line2[@]} -gt 0 ]; then
-    fit_join joined2 "${line2[@]}"
-    lines+=("$joined2")
+    fit_join "${line2[@]}"
+    lines+=("$JOINED_LINE")
   fi
   [ -n "$line3" ] && lines+=("$line3")
 
