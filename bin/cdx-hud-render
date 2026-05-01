@@ -251,6 +251,21 @@ extract_state() {
     fi
   fi
 
+  # Cache by mtime signature: if every input file's mtime is unchanged from
+  # the last call, the jq output cannot have changed either (rollouts are
+  # append-only, and rate-limit reset checks vs $now have at most a 5s lag
+  # which the next tick will catch). Skips re-cat-ing potentially-multi-MB
+  # rollouts when nothing's happened.
+  local sig=""
+  for f in ${files[@]+"${files[@]}"}; do
+    sig+="$(file_mtime "$f"):$f|"
+  done
+  sig+="active=$active_uuid"
+  if [ "$sig" = "${_STATE_CACHE_KEY:-}" ] && [ -n "${_STATE_CACHE_VALUE:-}" ]; then
+    printf '%s' "$_STATE_CACHE_VALUE"
+    return
+  fi
+
   # Loading state: wrapper launched us, but no rollout/snapshot has yet been
   # written for the new session. We still want to surface cross-session rate
   # limits, but per-session fields (model, context, session id) must not be
@@ -269,7 +284,8 @@ extract_state() {
   local now
   now=$(date +%s)
 
-  cat "${files[@]}" 2>/dev/null | jq -rn --argjson now "$now" --argjson loading "$loading" --arg active_id "$active_uuid" '
+  local _state_output
+  _state_output=$(cat "${files[@]}" 2>/dev/null | jq -rn --argjson now "$now" --argjson loading "$loading" --arg active_id "$active_uuid" '
     # Coerce a resets_at value (number, ISO-8601 string, or null) to epoch seconds.
     # Future Codex builds may emit ISO; current builds emit Unix seconds. Without
     # this, an ISO string would silently parse as 0 and trigger the stale-wipe.
@@ -372,7 +388,11 @@ extract_state() {
     | . + {loading: $loading}
     # Tab-separated KEY \t VALUE so the bash side can read without eval.
     | to_entries[] | "\(.key | ascii_upcase)\t\(.value)"
-  ' 2>/dev/null
+  ' 2>/dev/null)
+
+  _STATE_CACHE_KEY="$sig"
+  _STATE_CACHE_VALUE="$_state_output"
+  printf '%s\n' "$_state_output"
 }
 
 # ─── render ──────────────────────────────────────────────────────────────────
