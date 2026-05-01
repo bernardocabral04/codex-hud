@@ -601,9 +601,9 @@ render_once() {
   local i=0
   for out in ${lines[@]+"${lines[@]}"}; do
     if [ "$i" -eq 0 ]; then
-      printf '%s\033[K' "$out"
+      printf '  %s\033[K' "$out"
     else
-      printf '\n%s\033[K' "$out"
+      printf '\n  %s\033[K' "$out"
     fi
     i=$((i + 1))
   done
