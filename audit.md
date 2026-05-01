@@ -2,7 +2,7 @@
 
 Two independent Opus reviews, consolidated. Findings are deduplicated and grouped by severity. Line numbers reference the state of the repo at the time of review (commit `12b1721`).
 
-> **Status:** all critical, high, and medium findings have been addressed in subsequent commits. See the `git log` for `(audit #N)` markers — each fix sits in its own commit. Remaining items are low-severity correctness nuance (`#15`) or stylistic nits.
+> **Status:** all critical, high, and medium findings have been addressed in subsequent commits — see `git log` for `(audit #N)` markers. The post-audit work also turned up and fixed a series of issues the audit didn't catch: `/resume`-induced session drift, terminal-zoom clipping (both width and height), bash 3.2 signal-vs-builtin interactions around the WINCH-redraw path, and a `bash -c "..."` regression that orphaned the HUD pane on Ctrl+C. The current code uses tmux `client-resized` / `window-resized` hooks to pin pane height across resizes, queries pane geometry from the tmux server (not `tput`), and clips by both width and height as defense-in-depth. Remaining items are low-severity correctness nuance (`#15`) and stylistic nits.
 
 ---
 

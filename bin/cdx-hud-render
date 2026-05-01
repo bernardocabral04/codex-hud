@@ -657,11 +657,10 @@ render_once() {
   fi
   [ -n "$line3" ] && lines+=("$line3")
 
-  # Vertical clip: drop trailing entries if we'd overflow the pane height.
-  # The `\n` between lines advances the cursor; if any \n moves past the
-  # last visible row, tmux scrolls everything up and the top of the HUD
-  # disappears. Ordering means line 1 (top) wins priority over the yolo
-  # banner (bottom) — exactly the priority the user wants.
+  # Vertical clip — defense-in-depth. The wrapper's tmux client/window-resized
+  # hook keeps the HUD pane pinned at HUD_HEIGHT, so under normal use line
+  # count never exceeds pane height. This guard kicks in only on extreme
+  # zoom where total terminal rows can't accommodate HUD_HEIGHT + codex.
   local n=${#lines[@]}
   if [ "$n" -gt "$pane_height" ]; then
     lines=("${lines[@]:0:$pane_height}")
@@ -705,11 +704,10 @@ codex_pane_gone() {
   ! tmux list-panes -t "$CDX_HUD_CODEX_PANE" >/dev/null 2>&1
 }
 
-# Terminal resize / zoom sends SIGWINCH. Bash 3.2 defers signal-trap delivery
-# until the current builtin (read, wait) returns, and external sleep runs to
-# completion regardless. Solution: poll with short foreground sleeps and check
-# NEED_REDRAW between each — gives ≤200ms latency to react to a resize without
-# any backgrounded jobs (which would leak "Terminated: 15" job-control output).
+# SIGWINCH (terminal zoom / resize) sets NEED_REDRAW so the next loop
+# iteration re-renders against the new pane geometry. Bash 3.2 doesn't
+# interrupt builtins on signal — interruptible_sleep below polls in short
+# foreground steps to react within POLL_STEP seconds.
 NEED_REDRAW=0
 trap 'NEED_REDRAW=1' WINCH
 
