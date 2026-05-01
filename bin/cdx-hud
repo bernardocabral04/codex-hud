@@ -45,6 +45,13 @@ for _arg in $CODEX_CMD "$@"; do
 done
 unset _arg
 
+# YOLO adds a third visible row; size the HUD pane to keep exactly one
+# blank padding row at the bottom in either case (3 without yolo, 4 with).
+# Skipped when CDX_HUD_HEIGHT is set explicitly by the user.
+if [ -z "${CDX_HUD_HEIGHT:-}" ] && [ -n "$yolo_hint" ]; then
+  HUD_HEIGHT=4
+fi
+
 # If we're already inside tmux, just split and run codex in the current pane;
 # otherwise create a new tmux session and attach.
 if [ -n "${TMUX:-}" ]; then

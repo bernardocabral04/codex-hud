@@ -577,20 +577,6 @@ render_once() {
     fi
   fi
 
-  # Dynamic pane height: content rows + 1 padding row at bottom.
-  # Without yolo: 2 content + 1 padding = 3.
-  # With yolo:    3 content + 1 padding = 4.
-  # Resizes the HUD's own tmux pane on first render and whenever yolo
-  # state flips, so we never end up with two trailing blank rows.
-  if command -v tmux >/dev/null 2>&1; then
-    local target_height=3
-    [ -n "$line3" ] && target_height=4
-    if [ "${_LAST_PANE_HEIGHT:-0}" != "$target_height" ]; then
-      tmux resize-pane -y "$target_height" 2>/dev/null
-      _LAST_PANE_HEIGHT="$target_height"
-    fi
-  fi
-
   # ── output ────────────────────────────────────────────────────────
   # Build all rendered lines into an array; print with `\n` BETWEEN them
   # (no trailing newline), so cursor stays inside the pane's visible area
