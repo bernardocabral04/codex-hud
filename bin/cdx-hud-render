@@ -1,0 +1,223 @@
+#!/usr/bin/env bash
+# cdx-hud-render — render loop for the Codex HUD.
+# Tails the latest ~/.codex/sessions/**/rollout-*.jsonl and redraws every REFRESH_INTERVAL.
+# Designed to run inside a dedicated tmux pane spawned by `cdx-hud`.
+
+set -u
+
+CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
+SESSIONS_DIR="$CODEX_HOME/sessions"
+REFRESH_INTERVAL="${CDX_HUD_REFRESH:-2}"
+
+# Optional: pin the HUD to a specific rollout file (set by cdx-hud wrapper)
+PINNED_ROLLOUT="${CDX_HUD_ROLLOUT:-}"
+
+# ─── helpers ─────────────────────────────────────────────────────────────────
+
+fmt_remaining() {
+  local secs=$(( $1 - $(date +%s) ))
+  (( secs <= 0 )) && { echo "now"; return; }
+  local d=$((secs/86400)) h=$(((secs%86400)/3600)) m=$(((secs%3600)/60))
+  if   (( d > 0 )); then echo "${d}d${h}h"
+  elif (( h > 0 )); then echo "${h}h${m}m"
+  else                   echo "${m}m"
+  fi
+}
+
+# Pick ANSI color escape for a percentage, escalating: base → yellow ≥70 → bold bright red ≥90
+threshold_color() {
+  local pct=$1 base=$2
+  if awk "BEGIN{exit !($pct >= 90)}" 2>/dev/null; then echo "1;91"
+  elif awk "BEGIN{exit !($pct >= 70)}" 2>/dev/null; then echo "33"
+  else echo "$base"
+  fi
+}
+
+human_tokens() {
+  local n=$1
+  if [ "$n" -ge 1000000 ]; then awk "BEGIN { printf \"%.1fM\", $n / 1000000 }"
+  elif [ "$n" -ge 1000 ]; then awk "BEGIN { printf \"%.0fk\", $n / 1000 }"
+  else echo "$n"
+  fi
+}
+
+find_latest_rollout() {
+  if [ -n "$PINNED_ROLLOUT" ] && [ -f "$PINNED_ROLLOUT" ]; then
+    printf '%s\n' "$PINNED_ROLLOUT"; return
+  fi
+  find "$SESSIONS_DIR" -name "rollout-*.jsonl" -type f -print0 2>/dev/null \
+    | xargs -0 ls -t 2>/dev/null | head -1
+}
+
+# Get git branch + dirty + ahead/behind for a directory
+git_segment() {
+  local cwd="$1"
+  [ -z "$cwd" ] || [ ! -d "$cwd" ] && return
+  git -C "$cwd" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return
+  local branch dirty ab a b ahead_behind=""
+  branch=$(git -C "$cwd" -c gc.auto=0 symbolic-ref --short HEAD 2>/dev/null \
+    || git -C "$cwd" rev-parse --short HEAD 2>/dev/null)
+  [ -n "$(git -C "$cwd" -c gc.auto=0 status --porcelain 2>/dev/null)" ] && dirty="*"
+  ab=$(git -C "$cwd" -c gc.auto=0 rev-list --left-right --count HEAD...@{upstream} 2>/dev/null)
+  if [ -n "$ab" ]; then
+    a=$(printf '%s' "$ab" | awk '{print $1}')
+    b=$(printf '%s' "$ab" | awk '{print $2}')
+    [ "${a:-0}" -gt 0 ] 2>/dev/null && ahead_behind+="↑$a"
+    [ "${b:-0}" -gt 0 ] 2>/dev/null && ahead_behind+="${ahead_behind:+ }↓$b"
+  fi
+  printf '(%s%s)%s' "$branch" "$dirty" "${ahead_behind:+ $ahead_behind}"
+}
+
+# ─── extraction ──────────────────────────────────────────────────────────────
+
+extract_state() {
+  local file="$1"
+  # Pull session_meta (first line by convention) + last token_count + last turn_context.
+  # Emit shell-readable KEY=value lines; missing fields stay unset.
+  jq -r '
+    . as $r
+    | if $r.type == "session_meta" then
+        "META_ID=" + ($r.payload.id // "")
+        , "META_CWD=" + ($r.payload.cwd // "")
+        , "META_VERSION=" + ($r.payload.cli_version // "")
+        , "META_TIMESTAMP=" + ($r.payload.timestamp // "")
+      elif $r.payload.type == "token_count" then
+        "TOK_CTX=" + (($r.payload.info.last_token_usage.input_tokens // 0) | tostring)
+        , "TOK_SESSION_TOTAL=" + (($r.payload.info.total_token_usage.total_tokens // 0) | tostring)
+        , "TOK_WINDOW=" + (($r.payload.info.model_context_window // 0) | tostring)
+        , "RL_PRIMARY_PCT=" + (($r.payload.rate_limits.primary.used_percent // "") | tostring)
+        , "RL_PRIMARY_RESET=" + (($r.payload.rate_limits.primary.resets_at // "") | tostring)
+        , "RL_PRIMARY_WIN=" + (($r.payload.rate_limits.primary.window_minutes // "") | tostring)
+        , "RL_SECONDARY_PCT=" + (($r.payload.rate_limits.secondary.used_percent // "") | tostring)
+        , "RL_SECONDARY_RESET=" + (($r.payload.rate_limits.secondary.resets_at // "") | tostring)
+        , "RL_SECONDARY_WIN=" + (($r.payload.rate_limits.secondary.window_minutes // "") | tostring)
+        , "RL_PLAN=" + ($r.payload.rate_limits.plan_type // "")
+      elif $r.type == "turn_context" then
+        "TURN_MODEL=" + ($r.payload.model // "")
+        , "TURN_EFFORT=" + ($r.payload.effort // "")
+        , "TURN_CWD=" + ($r.payload.cwd // "")
+      else empty end
+  ' "$file" 2>/dev/null
+}
+
+# ─── render ──────────────────────────────────────────────────────────────────
+
+render_once() {
+  local rollout
+  rollout=$(find_latest_rollout)
+
+  # ANSI: clear screen + home cursor
+  printf '\033[H\033[2J'
+
+  if [ -z "$rollout" ]; then
+    printf '\033[90m(waiting for codex session…)\033[0m\n'
+    return
+  fi
+
+  # Reset all extractable vars before sourcing — older sessions may lack newer fields
+  META_ID="" META_CWD="" META_VERSION="" META_TIMESTAMP=""
+  TOK_CTX="" TOK_SESSION_TOTAL="" TOK_WINDOW=""
+  RL_PRIMARY_PCT="" RL_PRIMARY_RESET="" RL_PRIMARY_WIN=""
+  RL_SECONDARY_PCT="" RL_SECONDARY_RESET="" RL_SECONDARY_WIN="" RL_PLAN=""
+  TURN_MODEL="" TURN_EFFORT="" TURN_CWD=""
+
+  # Source the latest values: later lines overwrite earlier ones, so the most
+  # recent token_count / turn_context wins.
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    eval "$line"
+  done < <(extract_state "$rollout")
+
+  local cwd="${TURN_CWD:-$META_CWD}"
+  local model="${TURN_MODEL:-?}"
+  local effort="${TURN_EFFORT:-}"
+  local session_id="$META_ID"
+
+  # ── line 1 parts ─────────────────────────────────────────────────
+  local line1=()
+
+  # model (Claude purple #a78bfa)
+  local model_label="$model"
+  [ -n "$effort" ] && model_label="$model_label ($effort)"
+  line1+=("$(printf '\033[38;2;167;139;250m%s\033[0m' "$model_label")")
+
+  # context % — based on last input tokens vs model context window
+  if [ -n "$TOK_CTX" ] && [ -n "$TOK_WINDOW" ] && [ "$TOK_WINDOW" -gt 0 ]; then
+    local ctx_pct
+    ctx_pct=$(awk "BEGIN { printf \"%.0f\", $TOK_CTX * 100 / $TOK_WINDOW }")
+    local ctx_color
+    ctx_color=$(threshold_color "$ctx_pct" 32)
+    local human
+    human=$(human_tokens "$TOK_CTX")
+    line1+=("$(printf '\033[%sm%s%% (~%s)\033[0m' "$ctx_color" "$ctx_pct" "$human")")
+  fi
+
+  # rate limits
+  local rate_parts=()
+  if [ -n "$RL_PRIMARY_PCT" ]; then
+    local s c
+    s="5h:$(printf '%.0f' "$RL_PRIMARY_PCT")%"
+    [ -n "$RL_PRIMARY_RESET" ] && s="$s ($(fmt_remaining "$RL_PRIMARY_RESET"))"
+    c=$(threshold_color "$RL_PRIMARY_PCT" "38;2;120;160;230")
+    rate_parts+=("$(printf '\033[%sm%s\033[0m' "$c" "$s")")
+  fi
+  if [ -n "$RL_SECONDARY_PCT" ]; then
+    local s c
+    s="7d:$(printf '%.0f' "$RL_SECONDARY_PCT")%"
+    [ -n "$RL_SECONDARY_RESET" ] && s="$s ($(fmt_remaining "$RL_SECONDARY_RESET"))"
+    c=$(threshold_color "$RL_SECONDARY_PCT" "38;2;120;160;230")
+    rate_parts+=("$(printf '\033[%sm%s\033[0m' "$c" "$s")")
+  fi
+  if [ ${#rate_parts[@]} -gt 0 ]; then
+    local joined="${rate_parts[0]}"
+    local r
+    for r in "${rate_parts[@]:1}"; do joined+=" $r"; done
+    line1+=("$joined")
+  fi
+
+  # session id (dim grey)
+  if [ -n "$session_id" ]; then
+    line1+=("$(printf '\033[90m%s\033[0m' "$session_id")")
+  fi
+
+  # ── line 2 parts ─────────────────────────────────────────────────
+  local line2=()
+  local display_cwd="${cwd/#$HOME/~}"
+  [ -n "$display_cwd" ] && [ "${display_cwd: -1}" != "/" ] && display_cwd="$display_cwd/"
+  [ -n "$display_cwd" ] && line2+=("$(printf '\033[36m%s\033[0m' "$display_cwd")")
+
+  local git_label
+  git_label=$(git_segment "$cwd")
+  if [ -n "$git_label" ]; then
+    line2+=("$(printf '\033[33m%s\033[0m' "$git_label")")
+  else
+    line2+=("$(printf '\033[90mNo Git\033[0m')")
+  fi
+
+  # ── output ────────────────────────────────────────────────────────
+  local out p
+  if [ ${#line1[@]} -gt 0 ]; then
+    out="${line1[0]}"
+    for p in "${line1[@]:1}"; do
+      out+=$(printf ' \033[90m|\033[0m %s' "$p")
+    done
+    printf '%s\n' "$out"
+  fi
+  if [ ${#line2[@]} -gt 0 ]; then
+    out="${line2[0]}"
+    for p in "${line2[@]:1}"; do
+      out+=$(printf ' \033[90m|\033[0m %s' "$p")
+    done
+    printf '%s\n' "$out"
+  fi
+}
+
+# ─── main loop ───────────────────────────────────────────────────────────────
+
+trap 'printf "\033[?25h"' EXIT  # restore cursor on exit
+printf '\033[?25l'              # hide cursor
+
+while :; do
+  render_once
+  sleep "$REFRESH_INTERVAL"
+done

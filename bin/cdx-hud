@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# cdx-hud — launches Codex CLI inside a tmux session with a persistent HUD pane.
+# All extra args are forwarded to `codex`.
+
+set -u
+
+# Default to your existing alias behavior. Override via CDX_HUD_CODEX_CMD.
+CODEX_CMD="${CDX_HUD_CODEX_CMD:-codex --dangerously-bypass-approvals-and-sandbox}"
+HUD_HEIGHT="${CDX_HUD_HEIGHT:-2}"
+SESSION_PREFIX="${CDX_HUD_SESSION_PREFIX:-cdxhud}"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RENDER_BIN="$SCRIPT_DIR/cdx-hud-render"
+
+if ! command -v tmux >/dev/null 2>&1; then
+  echo "cdx-hud: tmux is required (brew install tmux)" >&2
+  exit 1
+fi
+if [ ! -x "$RENDER_BIN" ]; then
+  echo "cdx-hud: render script missing or not executable: $RENDER_BIN" >&2
+  exit 1
+fi
+
+# Build the codex command, escaping forwarded args for the shell.
+codex_full="$CODEX_CMD"
+for arg in "$@"; do
+  codex_full="$codex_full $(printf '%q' "$arg")"
+done
+
+cwd_q=$(printf '%q' "$PWD")
+
+# If we're already inside tmux, just split and run codex in the current pane;
+# otherwise create a new tmux session and attach.
+if [ -n "${TMUX:-}" ]; then
+  hud_pane=$(tmux split-window -v -l "$HUD_HEIGHT" -P -F "#{pane_id}" \
+    "exec '$RENDER_BIN'")
+  tmux select-pane -L 2>/dev/null || tmux select-pane -t "{up}"
+  # Run codex in the original pane and tear down the HUD when it exits.
+  exec bash -c "trap 'tmux kill-pane -t $hud_pane 2>/dev/null' EXIT; cd $cwd_q && $codex_full"
+fi
+
+session="${SESSION_PREFIX}-$$"
+tmux new-session -d -s "$session" -x "$(tput cols)" -y "$(tput lines)" \
+  "cd $cwd_q && $codex_full; tmux kill-session -t $session"
+tmux split-window -v -t "$session" -l "$HUD_HEIGHT" -b "exec '$RENDER_BIN'"
+tmux select-pane -t "$session" -U
+tmux set-option -t "$session" status off >/dev/null 2>&1 || true
+exec tmux attach-session -t "$session"
