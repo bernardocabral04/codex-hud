@@ -29,6 +29,7 @@ for arg in "$@"; do
 done
 
 cwd_q=$(printf '%q' "$PWD")
+render_bin_q=$(printf '%q' "$RENDER_BIN")
 start_epoch=$(date +%s)
 
 # Hint the render of YOLO mode immediately, even before turn_context flushes.
@@ -45,7 +46,7 @@ if [ -n "${TMUX:-}" ]; then
   codex_pane=$(tmux display-message -p '#{pane_id}')
   # Split a HUD pane BELOW the current pane, then return focus to the original.
   hud_pane=$(tmux split-window -v -l "$HUD_HEIGHT" -P -F "#{pane_id}" \
-    "CDX_HUD_START_EPOCH=$start_epoch CDX_HUD_CODEX_PANE=$codex_pane $yolo_hint exec '$RENDER_BIN'")
+    "CDX_HUD_START_EPOCH=$start_epoch CDX_HUD_CODEX_PANE=$codex_pane $yolo_hint exec $render_bin_q")
   tmux select-pane -U
   # EXIT trap (also INT/TERM/HUP) ensures kill-pane runs even if the shell
   # itself receives SIGINT alongside codex on Ctrl+C.
@@ -64,7 +65,7 @@ tmux new-session -d -s "$session" -x "$(tput cols)" -y "$(tput lines)" \
 codex_pane=$(tmux list-panes -t "$session" -F '#{pane_id}' | head -1)
 # Add HUD pane BELOW the codex pane.
 tmux split-window -v -t "$session" -l "$HUD_HEIGHT" \
-  "CDX_HUD_START_EPOCH=$start_epoch CDX_HUD_CODEX_PANE=$codex_pane $yolo_hint exec '$RENDER_BIN'"
+  "CDX_HUD_START_EPOCH=$start_epoch CDX_HUD_CODEX_PANE=$codex_pane $yolo_hint exec $render_bin_q"
 # Focus codex (the upper pane).
 tmux select-pane -t "$session" -U
 tmux set-option -t "$session" status off >/dev/null 2>&1 || true
