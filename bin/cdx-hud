@@ -33,11 +33,17 @@ render_bin_q=$(printf '%q' "$RENDER_BIN")
 start_epoch=$(date +%s)
 
 # Hint the render of YOLO mode immediately, even before turn_context flushes.
-# Looks at the resolved codex command for the bypass flag.
-case " $CODEX_CMD $* " in
-  *" --dangerously-bypass-approvals-and-sandbox "*) yolo_hint="CDX_HUD_YOLO=1" ;;
-  *) yolo_hint="" ;;
-esac
+# Walk the codex invocation and forwarded args looking for an EXACT match
+# on the bypass flag — substring matches (e.g. a path argument literally
+# named "--dangerously-bypass-approvals-and-sandbox") would false-positive.
+yolo_hint=""
+for _arg in $CODEX_CMD "$@"; do
+  if [ "$_arg" = "--dangerously-bypass-approvals-and-sandbox" ]; then
+    yolo_hint="CDX_HUD_YOLO=1"
+    break
+  fi
+done
+unset _arg
 
 # If we're already inside tmux, just split and run codex in the current pane;
 # otherwise create a new tmux session and attach.
