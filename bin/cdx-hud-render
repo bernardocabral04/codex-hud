@@ -433,11 +433,9 @@ render_once() {
   local rollout
   rollout=$(find_latest_rollout)
 
-  # Full-screen clear before each redraw. We use \033[2J (clear entire screen)
-  # rather than \033[J (clear-from-cursor-down) so a terminal resize that left
-  # wider stale content on lower rows doesn't bleed through — \033[K only
-  # clears one line.
-  printf '\033[2J\033[H'
+  # Home cursor only — per-line ESC[K + a final ESC[J in the output block
+  # below clears stale content without the flicker that ESC[2J causes.
+  printf '\033[H'
 
   if [ -z "$rollout" ]; then
     printf '\033[90m(waiting for codex session…)\033[0m\n'
@@ -590,26 +588,27 @@ render_once() {
   # line 1 wrap to two rows, pushing line-1's head past the pane top. Drop
   # trailing segments greedily until what's left fits in one row. Earlier
   # segments (model, context) win priority over later ones (session id).
-  # Pane width detection. tput cols is unreliable here: when this function's
-  # output is captured via $(...), tput sees a pipe instead of a tty and
-  # silently falls back to the terminfo default (80) — making the HUD think
-  # the pane is wider than it really is, so we under-truncate and the pane
-  # clips the right edge. Source the width from tmux instead, which queries
-  # the server directly. stty as a secondary fallback.
-  local pane_width=""
-  if command -v tmux >/dev/null 2>&1; then
-    pane_width=$(tmux display-message -p '#{pane_width}' 2>/dev/null)
+  # Pane geometry — query tmux directly. tput / LINES / COLUMNS are stale in
+  # a $(...) subshell and bash 3.2 doesn't update them on SIGWINCH from a
+  # script. tmux display-message asks the tmux server live every render.
+  local pane_width="" pane_height=""
+  if command -v tmux >/dev/null 2>&1 && [ -n "${TMUX_PANE:-${TMUX:-}}" ]; then
+    read -r pane_width pane_height < <(
+      tmux display-message -p -t "${TMUX_PANE:-}" '#{pane_width} #{pane_height}' 2>/dev/null
+    )
   fi
   if [ -z "$pane_width" ] || [ "$pane_width" = "0" ]; then
     pane_width=$(stty size </dev/tty 2>/dev/null | awk '{print $2}')
   fi
-  if [ -z "$pane_width" ] || [ "$pane_width" = "0" ]; then
-    pane_width=$(tput cols 2>/dev/null)
+  if [ -z "$pane_height" ] || [ "$pane_height" = "0" ]; then
+    pane_height=$(stty size </dev/tty 2>/dev/null | awk '{print $1}')
   fi
-  : "${pane_width:=80}"
+  [ -z "$pane_width" ]  && pane_width=$(tput cols 2>/dev/null)
+  [ -z "$pane_height" ] && pane_height=$(tput lines 2>/dev/null)
+  : "${pane_width:=80}" "${pane_height:=3}"
   local available=$((pane_width - 4))  # 2-space left margin + safety
   [ "$available" -lt 10 ] && available=10
-  debug_log "render: pane_width=$pane_width available=$available"
+  debug_log "render: pane_width=$pane_width pane_height=$pane_height available=$available"
 
   # Visible-length measurement for ANSI-styled strings. Single sed call.
   visible_len() {
@@ -658,15 +657,30 @@ render_once() {
   fi
   [ -n "$line3" ] && lines+=("$line3")
 
+  # Vertical clip: drop trailing entries if we'd overflow the pane height.
+  # The `\n` between lines advances the cursor; if any \n moves past the
+  # last visible row, tmux scrolls everything up and the top of the HUD
+  # disappears. Ordering means line 1 (top) wins priority over the yolo
+  # banner (bottom) — exactly the priority the user wants.
+  local n=${#lines[@]}
+  if [ "$n" -gt "$pane_height" ]; then
+    lines=("${lines[@]:0:$pane_height}")
+    n=$pane_height
+  fi
+
+  # Render: home, then for each line emit `\033[K` (erase to EOL, kills
+  # stale chars), with `\n` BETWEEN lines only — never after the final.
+  # After the last line, `\033[J` clears any rows below carried over from
+  # a previous (taller) frame, so a zoom-OUT also leaves no debris.
   local i=0
   for out in ${lines[@]+"${lines[@]}"}; do
-    if [ "$i" -eq 0 ]; then
-      printf '  %s\033[K' "$out"
-    else
-      printf '\n  %s\033[K' "$out"
+    if [ "$i" -gt 0 ]; then
+      printf '\n'
     fi
+    printf '  %s\033[K' "$out"
     i=$((i + 1))
   done
+  printf '\033[J'
 }
 
 # ─── main loop ───────────────────────────────────────────────────────────────
