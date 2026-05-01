@@ -12,6 +12,22 @@ REFRESH_INTERVAL="${CDX_HUD_REFRESH:-5}"
 # Optional: pin the HUD to a specific rollout file (set by cdx-hud wrapper)
 PINNED_ROLLOUT="${CDX_HUD_ROLLOUT:-}"
 
+# Debug log — set CDX_HUD_DEBUG=1 to capture stderr + per-tick state to a
+# file you can `tail -f` while reproducing an issue.
+DEBUG_LOG="$CODEX_HOME/cdx-hud-debug.log"
+if [ "${CDX_HUD_DEBUG:-0}" = "1" ]; then
+  : > "$DEBUG_LOG" 2>/dev/null || DEBUG_LOG=""
+  if [ -n "$DEBUG_LOG" ]; then
+    exec 2>>"$DEBUG_LOG"
+    printf '[%s] cdx-hud-render starting (pid=%s, codex_home=%s)\n' \
+      "$(date '+%H:%M:%S')" "$$" "$CODEX_HOME" >&2
+  fi
+fi
+debug_log() {
+  [ "${CDX_HUD_DEBUG:-0}" = "1" ] || return 0
+  printf '[%s] %s\n' "$(date '+%H:%M:%S')" "$*" >&2
+}
+
 # Detect once which stat(1) flag returns mtime as Unix epoch seconds.
 # macOS / BSD: `stat -f %m`. GNU coreutils (Linux): `stat -c %Y`.
 if stat -f %m / >/dev/null 2>&1; then
@@ -146,6 +162,7 @@ detect_active_session() {
     fi
   fi
 
+  debug_log "detect_active_session: uuid=${newest_uuid:-<none>} rollout=${newest_rollout:-<none>} cutoff=$cutoff"
   printf '%s|%s\n' "$newest_uuid" "$newest_rollout"
 }
 
@@ -359,6 +376,7 @@ render_once() {
       [A-Z_][A-Z0-9_]*) printf -v "$_k" '%s' "$_v" ;;
     esac
   done < <(extract_state "$rollout")
+  debug_log "render: meta_id=${META_ID:-<empty>} model=${TURN_MODEL:-<empty>} loading=${LOADING:-<empty>} ctx=${TOK_CTX:-<empty>}/${TOK_WINDOW:-<empty>} 5h=${RL_PRIMARY_PCT:-<empty>}(hit=${RL_PRIMARY_HIT:-0}) 7d=${RL_SECONDARY_PCT:-<empty>}(hit=${RL_SECONDARY_HIT:-0})"
 
   local cwd="${TURN_CWD:-${META_CWD:-$PWD}}"
 

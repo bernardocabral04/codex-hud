@@ -40,6 +40,7 @@ alias cdxy="CDX_HUD_CODEX_CMD='codex --dangerously-bypass-approvals-and-sandbox'
 | `CDX_HUD_CODEX_PANE` | (auto) | tmux pane id of the codex pane. The wrapper sets this so the render can self-exit when codex's pane is gone. |
 | `CDX_HUD_START_EPOCH` | (auto) | Unix epoch when the wrapper launched, used to ignore older rollouts. Set by the wrapper. |
 | `CODEX_HOME` | `$HOME/.codex` | Codex's data directory. Honored by the render. |
+| `CDX_HUD_DEBUG` | `0` | Set to `1` to log detection + per-tick state to `$CODEX_HOME/cdx-hud-debug.log`. `tail -f` it while reproducing an issue. |
 
 ## Display
 
