@@ -635,14 +635,35 @@ codex_pane_gone() {
   ! tmux list-panes -t "$CDX_HUD_CODEX_PANE" >/dev/null 2>&1
 }
 
+# Terminal resize / zoom sends SIGWINCH. Tmux propagates it to this pane's
+# bash, which resizes the alt-screen — without an immediate redraw the HUD's
+# first line can scroll off and stay missing until the next tick (up to
+# REFRESH_INTERVAL seconds). Two-part response:
+#   - Set NEED_REDRAW so the loop skips the next sleep if WINCH arrived
+#     mid-render (signal handlers run between commands, so the kill below
+#     would no-op against an already-completed sleep).
+#   - kill the backgrounded sleep so an in-flight wait returns immediately.
+NEED_REDRAW=0
+on_winch() {
+  NEED_REDRAW=1
+  [ -n "${_SLEEP_PID:-}" ] && kill "$_SLEEP_PID" 2>/dev/null
+}
+trap on_winch WINCH
+
 while :; do
+  NEED_REDRAW=0
   render_once
   if codex_pane_gone; then
     exit 0
   fi
-  if [ "${LOADING:-0}" = "1" ]; then
-    sleep "$LOADING_REFRESH"
-  else
-    sleep "$REFRESH_INTERVAL"
+  if [ "$NEED_REDRAW" = "1" ]; then
+    continue
   fi
+  if [ "${LOADING:-0}" = "1" ]; then
+    sleep "$LOADING_REFRESH" & _SLEEP_PID=$!
+  else
+    sleep "$REFRESH_INTERVAL" & _SLEEP_PID=$!
+  fi
+  wait "$_SLEEP_PID" 2>/dev/null
+  _SLEEP_PID=""
 done
