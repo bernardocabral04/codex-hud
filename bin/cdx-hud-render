@@ -494,7 +494,7 @@ render_once() {
 
 # Enter alternate screen (isolated buffer, no scrollback pollution) + hide cursor.
 # Restored on exit even if killed.
-trap 'printf "\033[?25h\033[?1049l"' EXIT INT TERM
+trap 'printf "\033[?25h\033[?1049l"' EXIT INT TERM HUP QUIT
 printf '\033[?1049h\033[?25l'
 
 # Poll quickly while in the "Loading session…" state so first real data
