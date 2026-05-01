@@ -33,7 +33,7 @@ alias cdxy="CDX_HUD_CODEX_CMD='codex --dangerously-bypass-approvals-and-sandbox'
 | `CDX_HUD_CODEX_CMD` | `codex` | Resolved codex invocation. Set to include `--dangerously-bypass-approvals-and-sandbox` for YOLO. |
 | `CDX_HUD_HEIGHT` | `3` | HUD pane height in lines (3 fits all three lines including the YOLO banner). |
 | `CDX_HUD_REFRESH` | `5` | Render-loop interval in seconds. |
-| `CDX_HUD_LOADING_REFRESH` | `0.3` | Tighter interval used while the "Loading Codex session…" placeholder is showing. |
+| `CDX_HUD_LOADING_REFRESH` | `1` | Tighter interval used while the "Loading Codex session…" placeholder is showing. |
 | `CDX_HUD_SESSION_PREFIX` | `cdxhud` | Prefix for the tmux session name when launched outside an existing tmux. |
 | `CDX_HUD_ROLLOUT` | (auto) | Pin a specific rollout file (debug). |
 | `CDX_HUD_YOLO` | (auto) | Force the YOLO banner. The wrapper sets this when it sees `--dangerously-bypass-approvals-and-sandbox`. |
