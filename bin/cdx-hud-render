@@ -208,7 +208,8 @@ extract_state() {
          rl_primary_pct:"", rl_primary_reset:"", rl_primary_win:"", rl_primary_currently_null:0,
          rl_secondary_pct:"", rl_secondary_reset:"", rl_secondary_win:"", rl_secondary_currently_null:0,
          rl_plan:"", rl_limit_id:"",
-         turn_model:"", turn_effort:"", turn_cwd:""};
+         turn_model:"", turn_effort:"", turn_cwd:"",
+         turn_approval:"", turn_sandbox:""};
         if $r.type == "session_meta" then
           .meta_id = ($r.payload.id // "")
           | .meta_cwd = ($r.payload.cwd // "")
@@ -220,6 +221,8 @@ extract_state() {
           | .turn_model = ""
           | .turn_effort = ""
           | .turn_cwd = ""
+          | .turn_approval = ""
+          | .turn_sandbox = ""
         elif $r.payload.type == "token_count" then
           # Token usage block is null when the session opens already rate-limited.
           # Only overwrite when fresh data exists; otherwise preserve last known.
@@ -254,6 +257,8 @@ extract_state() {
           .turn_model = ($r.payload.model // .turn_model)
           | .turn_effort = ($r.payload.effort // .turn_effort)
           | .turn_cwd = ($r.payload.cwd // .turn_cwd)
+          | .turn_approval = ($r.payload.approval_policy // .turn_approval)
+          | .turn_sandbox = ($r.payload.sandbox_policy.type // .turn_sandbox)
         else . end
       )
     # If last-known reset has already passed, the data is stale to the point of
@@ -280,11 +285,13 @@ extract_state() {
     | (if $loading == 1 then
          .meta_id = "" | .tok_ctx = 0 | .tok_session_total = 0
          | .turn_model = "" | .turn_effort = "" | .turn_cwd = ""
+         | .turn_approval = "" | .turn_sandbox = ""
        elif ($active_id // "") != "" and .meta_id != $active_id then
          # Wrapper detected a session id different from the last we saw events
          # for — zero per-session fields rather than show stale numbers.
          .meta_id = $active_id | .tok_ctx = 0 | .tok_session_total = 0
          | .turn_model = "" | .turn_effort = "" | .turn_cwd = ""
+         | .turn_approval = "" | .turn_sandbox = ""
        else . end)
     | . + {loading: $loading}
     | to_entries[] | "\(.key | ascii_upcase)=\(.value)"
@@ -314,6 +321,7 @@ render_once() {
   RL_SECONDARY_CURRENTLY_NULL="" RL_SECONDARY_HIT="" RL_SECONDARY_STALE=""
   RL_PLAN="" RL_LIMIT_ID="" LOADING=""
   TURN_MODEL="" TURN_EFFORT="" TURN_CWD=""
+  TURN_APPROVAL="" TURN_SANDBOX=""
 
   # Source the latest values: later lines overwrite earlier ones, so the most
   # recent token_count / turn_context wins.
@@ -417,6 +425,15 @@ render_once() {
     line2+=("$(printf '\033[90mNo Git\033[0m')")
   fi
 
+  # ── line 3: YOLO banner (only when active and not in loading state) ──
+  local line3=""
+  if [ "$LOADING" != "1" ]; then
+    if [ "${CDX_HUD_YOLO:-}" = "1" ] \
+       || { [ "$TURN_APPROVAL" = "never" ] && [ "$TURN_SANDBOX" = "danger-full-access" ]; }; then
+      line3=$(printf '\033[1;91m▶▶ yolo mode on\033[0m')
+    fi
+  fi
+
   # ── output ────────────────────────────────────────────────────────
   local out p
   if [ ${#line1[@]} -gt 0 ]; then
@@ -432,6 +449,9 @@ render_once() {
       out+=$(printf ' \033[90m|\033[0m %s' "$p")
     done
     printf '%s\033[K\n' "$out"
+  fi
+  if [ -n "$line3" ]; then
+    printf '%s\033[K\n' "$line3"
   fi
 }
 
