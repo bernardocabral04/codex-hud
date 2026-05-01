@@ -585,20 +585,64 @@ render_once() {
   # Build all rendered lines into an array; print with `\n` BETWEEN them
   # (no trailing newline), so cursor stays inside the pane's visible area
   # and the first line never scrolls off the top.
-  local lines=() out p
-  if [ ${#line1[@]} -gt 0 ]; then
-    out="${line1[0]}"
-    for p in "${line1[@]:1}"; do
-      out+=$(printf ' \033[90m|\033[0m %s' "$p")
+  #
+  # Pane width detection — narrow panes (after a terminal zoom-in) would let
+  # line 1 wrap to two rows, pushing line-1's head past the pane top. Drop
+  # trailing segments greedily until what's left fits in one row. Earlier
+  # segments (model, context) win priority over later ones (session id).
+  local pane_width
+  pane_width=$(tput cols 2>/dev/null)
+  : "${pane_width:=80}"
+  local available=$((pane_width - 4))  # 2-space left margin + safety
+  [ "$available" -lt 10 ] && available=10
+
+  # Strip ANSI escape sequences for visible-length measurement.
+  ansi_strip() {
+    printf '%s' "$1" | sed 's/\x1b\[[0-9;]*m//g'
+  }
+
+  # Greedy join: append each segment with " | " separator only if it still
+  # fits in the available width; stop at the first segment that overflows.
+  fit_join() {
+    local result="" stripped vlen plen=0 seg
+    local first=1
+    local arrname=$1; shift
+    for seg in "$@"; do
+      stripped=$(ansi_strip "$seg")
+      vlen=${#stripped}
+      if [ "$first" = "1" ]; then
+        plen=0
+      else
+        plen=3  # " | "
+      fi
+      local current_visible=0
+      if [ -n "$result" ]; then
+        local r_stripped
+        r_stripped=$(ansi_strip "$result")
+        current_visible=${#r_stripped}
+      fi
+      if [ $((current_visible + plen + vlen)) -le "$available" ]; then
+        if [ "$first" = "1" ]; then
+          result="$seg"
+          first=0
+        else
+          result+=$(printf ' \033[90m|\033[0m %s' "$seg")
+        fi
+      else
+        break
+      fi
     done
-    lines+=("$out")
+    printf -v "$arrname" '%s' "$result"
+  }
+
+  local lines=() joined1 joined2
+  if [ ${#line1[@]} -gt 0 ]; then
+    fit_join joined1 "${line1[@]}"
+    lines+=("$joined1")
   fi
   if [ ${#line2[@]} -gt 0 ]; then
-    out="${line2[0]}"
-    for p in "${line2[@]:1}"; do
-      out+=$(printf ' \033[90m|\033[0m %s' "$p")
-    done
-    lines+=("$out")
+    fit_join joined2 "${line2[@]}"
+    lines+=("$joined2")
   fi
   [ -n "$line3" ] && lines+=("$line3")
 
