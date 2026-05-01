@@ -87,9 +87,15 @@ threshold_color() {
 read_config_defaults() {
   local cfg="$CODEX_HOME/config.toml"
   [ -f "$cfg" ] || { printf '|\n'; return; }
+  # Only read model + reasoning_effort from the top-level table (before the
+  # first `[section]` line). Without the boundary, the regex would match keys
+  # under [profiles.foo], [mcp_servers.bar], etc., which can have their own
+  # `model = "..."` overrides unrelated to the user's actual default.
   local m e
-  m=$(awk -F'=' '/^[[:space:]]*model[[:space:]]*=/ { gsub(/[ "]/,"",$2); print $2; exit }' "$cfg" 2>/dev/null)
-  e=$(awk -F'=' '/^[[:space:]]*model_reasoning_effort[[:space:]]*=/ { gsub(/[ "]/,"",$2); print $2; exit }' "$cfg" 2>/dev/null)
+  m=$(awk '/^[[:space:]]*\[/ {exit}
+           /^[[:space:]]*model[[:space:]]*=/ { sub(/^[^=]*=[[:space:]]*/, ""); sub(/[[:space:]]*#.*$/, ""); gsub(/^["'\'']|["'\'']$/, ""); print; exit }' "$cfg" 2>/dev/null)
+  e=$(awk '/^[[:space:]]*\[/ {exit}
+           /^[[:space:]]*model_reasoning_effort[[:space:]]*=/ { sub(/^[^=]*=[[:space:]]*/, ""); sub(/[[:space:]]*#.*$/, ""); gsub(/^["'\'']|["'\'']$/, ""); print; exit }' "$cfg" 2>/dev/null)
   printf '%s|%s\n' "$m" "$e"
 }
 
