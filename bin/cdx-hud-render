@@ -442,7 +442,15 @@ render_once() {
 trap 'printf "\033[?25h\033[?1049l"' EXIT INT TERM
 printf '\033[?1049h\033[?25l'
 
+# Poll quickly while in the "Loading session…" state so first real data
+# shows up promptly; back off to the normal interval once data arrives.
+LOADING_REFRESH="${CDX_HUD_LOADING_REFRESH:-0.3}"
+
 while :; do
   render_once
-  sleep "$REFRESH_INTERVAL"
+  if [ "${LOADING:-0}" = "1" ]; then
+    sleep "$LOADING_REFRESH"
+  else
+    sleep "$REFRESH_INTERVAL"
+  fi
 done
