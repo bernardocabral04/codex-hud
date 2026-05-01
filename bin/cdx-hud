@@ -60,12 +60,23 @@ if [ -n "${TMUX:-}" ]; then
 fi
 
 session="${SESSION_PREFIX}-$$"
-# Main pane runs codex with an EXIT trap that kills the whole session no matter
-# how the shell terminates (clean exit, signal, error). Without the trap, a
-# bare `codex; tmux kill-session ...` chain would leak the HUD pane whenever
-# bash itself died from SIGINT before reaching the kill-session command.
-tmux new-session -d -s "$session" -x "$(tput cols)" -y "$(tput lines)" \
-  "bash -c \"trap 'tmux kill-session -t $session 2>/dev/null' EXIT INT TERM HUP; cd $cwd_q && $codex_full\""
+# Main pane runs codex via a one-shot dispatch script that:
+#   1. Carries an EXIT/INT/TERM/HUP trap to kill-session even if its bash dies
+#      from SIGINT alongside codex on Ctrl+C (otherwise the HUD pane orphans).
+#   2. Cleans itself up on exit.
+#   3. Avoids the nested `tmux's sh -c → bash -c "..."` double-parse where
+#      our %q-escaped codex args would re-expand and break on $, backticks, !.
+# The dispatch file is executed directly by tmux (one shell parse), so a single
+# round of %q-escaping in $codex_full / $cwd_q is sufficient.
+dispatch_file=$(mktemp -t cdxhud.XXXXXX)
+chmod +x "$dispatch_file"
+cat > "$dispatch_file" <<EOF
+#!/usr/bin/env bash
+trap "rm -f -- $(printf '%q' "$dispatch_file"); tmux kill-session -t $(printf '%q' "$session") 2>/dev/null" EXIT INT TERM HUP
+cd $cwd_q
+exec $codex_full
+EOF
+tmux new-session -d -s "$session" -x "$(tput cols)" -y "$(tput lines)" "$dispatch_file"
 # Capture the codex pane id (the only pane in the session right now) so the
 # HUD can detect when it disappears.
 codex_pane=$(tmux list-panes -t "$session" -F '#{pane_id}' | head -1)
