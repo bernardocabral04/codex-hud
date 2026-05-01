@@ -89,4 +89,9 @@ tmux split-window -v -t "$session" -l "$HUD_HEIGHT" \
 # Focus codex (the upper pane).
 tmux select-pane -t "$session" -U
 tmux set-option -t "$session" status off >/dev/null 2>&1 || true
+# Pass codex's pane title (which it sets via OSC 2 — model + spinner + task)
+# through to the outer terminal tab. Default tmux title would show
+# '[<session>] <window> "<command>"' which leaks our tmux session name.
+tmux set-option -t "$session" set-titles on >/dev/null 2>&1 || true
+tmux set-option -t "$session" set-titles-string '#T' >/dev/null 2>&1 || true
 exec tmux attach-session -t "$session"
