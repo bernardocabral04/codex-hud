@@ -470,7 +470,13 @@ render_once() {
 
   # ── line 2 parts ─────────────────────────────────────────────────
   local line2=()
-  local display_cwd="${cwd/#$HOME/~}"
+  # Replace leading $HOME with ~ via literal prefix-strip + concat, not the
+  # ${var/#PAT/REPL} form (which treats PAT as a glob, so a $HOME containing
+  # '[', '*', or '?' would mis-replace).
+  local display_cwd="$cwd"
+  if [ -n "$HOME" ] && [ "${cwd#$HOME}" != "$cwd" ]; then
+    display_cwd="~${cwd#$HOME}"
+  fi
   [ -n "$display_cwd" ] && [ "${display_cwd: -1}" != "/" ] && display_cwd="$display_cwd/"
   [ -n "$display_cwd" ] && line2+=("$(printf '\033[36m%s\033[0m' "$display_cwd")")
 
