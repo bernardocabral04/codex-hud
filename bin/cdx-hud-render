@@ -126,18 +126,24 @@ detect_active_session() {
   # instances launched within the cutoff slack window from stealing each
   # other's session.
   #
-  # BUT — codex's /resume command opens a previous rollout file in-place
-  # (same wrapper, same render process). That older rollout's mtime jumps
-  # forward when codex starts appending. Detect this by checking whether ANY
-  # other rollout has been touched more recently than the pinned one; if so,
-  # invalidate the pin and re-detect.
+  # BUT — codex's /resume command opens a previous rollout in-place. The
+  # initial signal is a fresh shell_snapshot for the resumed session UUID;
+  # the rollout file itself isn't touched until the user actually sends a
+  # message. So both rollouts AND snapshots can be the "newer" signal that
+  # invalidates the pin.
   if [ -n "${_PINNED_UUID:-}" ] && [ -n "${_PINNED_ROLLOUT:-}" ] \
      && [ -f "$_PINNED_ROLLOUT" ]; then
-    if [ -z "$(find "$SESSIONS_DIR" -name 'rollout-*.jsonl' -type f -newer "$_PINNED_ROLLOUT" 2>/dev/null | head -1)" ]; then
+    local newer_rollout newer_snapshot
+    newer_rollout=$(find "$SESSIONS_DIR" -name 'rollout-*.jsonl' -type f -newer "$_PINNED_ROLLOUT" 2>/dev/null | head -1)
+    newer_snapshot=""
+    if [ -d "$CODEX_HOME/shell_snapshots" ]; then
+      newer_snapshot=$(find "$CODEX_HOME/shell_snapshots" -name '*.sh' -type f -newer "$_PINNED_ROLLOUT" 2>/dev/null | head -1)
+    fi
+    if [ -z "$newer_rollout" ] && [ -z "$newer_snapshot" ]; then
       printf '%s|%s\n' "$_PINNED_UUID" "$_PINNED_ROLLOUT"
       return
     fi
-    debug_log "detect_active_session: pin invalidated — newer rollout detected (likely /resume)"
+    debug_log "detect_active_session: pin invalidated — newer ${newer_rollout:+rollout }${newer_snapshot:+snapshot }detected (likely /resume)"
     _PINNED_UUID=""
     _PINNED_ROLLOUT=""
   fi
@@ -176,6 +182,20 @@ detect_active_session() {
       newest_rollout="$f"
     fi
   done < <(find "$SESSIONS_DIR" -name "rollout-*.jsonl" -type f 2>/dev/null | sort | tail -10)
+
+  # If a fresh shell_snapshot won the UUID race but no rollout was touched
+  # within the cutoff (typical right after /resume — codex creates a new
+  # snapshot but doesn't write to the rollout until the user sends a turn),
+  # locate the matching rollout by UUID. Otherwise we'd treat the resumed
+  # session as "loading" and ignore its rich history.
+  if [ -n "$newest_uuid" ] && [ -z "$newest_rollout" ]; then
+    local match
+    match=$(find "$SESSIONS_DIR" -name "rollout-*-$newest_uuid.jsonl" -type f 2>/dev/null | head -1)
+    if [ -n "$match" ]; then
+      newest_rollout="$match"
+      debug_log "detect_active_session: matched snapshot UUID to rollout: $match"
+    fi
+  fi
 
   # If we have no wrapper context (no start epoch), fall back to the most recent
   # rollout. With wrapper context, an empty result means "loading" — the caller
