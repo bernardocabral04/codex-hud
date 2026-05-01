@@ -700,11 +700,16 @@ while :; do
   if [ "$NEED_REDRAW" = "1" ]; then
     continue
   fi
+  # Background the sleep with both its own stderr and the parent shell's
+  # job-control output redirected. Without this, killing the sleep on WINCH
+  # made bash print "Terminated: 15  sleep <N>" on stderr (job-completion
+  # notification) — visible above the HUD until the next redraw.
   if [ "${LOADING:-0}" = "1" ]; then
-    sleep "$LOADING_REFRESH" & _SLEEP_PID=$!
+    { sleep "$LOADING_REFRESH" 2>/dev/null & } 2>/dev/null
   else
-    sleep "$REFRESH_INTERVAL" & _SLEEP_PID=$!
+    { sleep "$REFRESH_INTERVAL" 2>/dev/null & } 2>/dev/null
   fi
-  wait "$_SLEEP_PID" 2>/dev/null
+  _SLEEP_PID=$!
+  { wait "$_SLEEP_PID"; } 2>/dev/null
   _SLEEP_PID=""
 done
