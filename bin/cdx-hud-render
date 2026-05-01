@@ -33,6 +33,18 @@ threshold_color() {
   fi
 }
 
+# Read default model + reasoning_effort from ~/.codex/config.toml.
+# Used as a fallback when the active session has no turn_context event yet.
+# Output format: "model|effort" (either side may be empty).
+read_config_defaults() {
+  local cfg="$CODEX_HOME/config.toml"
+  [ -f "$cfg" ] || { printf '|\n'; return; }
+  local m e
+  m=$(awk -F'=' '/^[[:space:]]*model[[:space:]]*=/ { gsub(/[ "]/,"",$2); print $2; exit }' "$cfg" 2>/dev/null)
+  e=$(awk -F'=' '/^[[:space:]]*model_reasoning_effort[[:space:]]*=/ { gsub(/[ "]/,"",$2); print $2; exit }' "$cfg" 2>/dev/null)
+  printf '%s|%s\n' "$m" "$e"
+}
+
 human_tokens() {
   local n=$1
   if [ "$n" -ge 1000000 ]; then awk "BEGIN { printf \"%.1fM\", $n / 1000000 }"
@@ -168,12 +180,12 @@ extract_state() {
     fi
   fi
 
-  # Loading state: wrapper launched us, but the new session has no rollout
-  # JSONL yet (just a shell_snapshot or nothing at all). Per-session fields
-  # would otherwise either be blank ("?") or leak from prior sessions —
-  # display a clean "Loading Codex session…" placeholder instead.
+  # Loading state: wrapper launched us, but no rollout/snapshot has yet been
+  # written for the new session. We still want to surface cross-session rate
+  # limits, but per-session fields (model, context, session id) must not be
+  # taken from the prior session — show a "loading" placeholder instead.
   local loading=0
-  if [ -n "${CDX_HUD_START_EPOCH:-}" ] && [ -z "$active_rollout" ]; then
+  if [ -n "${CDX_HUD_START_EPOCH:-}" ] && [ -z "$active_uuid" ]; then
     loading=1
   fi
 
@@ -311,8 +323,13 @@ render_once() {
   done < <(extract_state "$rollout")
 
   local cwd="${TURN_CWD:-${META_CWD:-$PWD}}"
-  local model="${TURN_MODEL:-}"
-  local effort="${TURN_EFFORT:-}"
+
+  # Fall back to config.toml defaults when the rollout has no turn_context yet.
+  local default_model="" default_effort=""
+  IFS='|' read -r default_model default_effort < <(read_config_defaults)
+
+  local model="${TURN_MODEL:-$default_model}"
+  local effort="${TURN_EFFORT:-$default_effort}"
   local session_id="$META_ID"
 
   # ── line 1 parts ─────────────────────────────────────────────────
