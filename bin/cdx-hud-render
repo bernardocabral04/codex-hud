@@ -45,8 +45,19 @@ find_latest_rollout() {
   if [ -n "$PINNED_ROLLOUT" ] && [ -f "$PINNED_ROLLOUT" ]; then
     printf '%s\n' "$PINNED_ROLLOUT"; return
   fi
-  find "$SESSIONS_DIR" -name "rollout-*.jsonl" -type f -print0 2>/dev/null \
-    | xargs -0 ls -t 2>/dev/null | head -1
+  find "$SESSIONS_DIR" -name "rollout-*.jsonl" -type f 2>/dev/null \
+    | sort | tail -1
+}
+
+# Recent rollouts, oldest → newest. Used to recover last-known rate limit state
+# across session boundaries (e.g., when the current session opens already
+# rate-limited and reports primary=null, secondary=null from the start).
+find_recent_rollouts() {
+  if [ -n "$PINNED_ROLLOUT" ] && [ -f "$PINNED_ROLLOUT" ]; then
+    printf '%s\n' "$PINNED_ROLLOUT"; return
+  fi
+  find "$SESSIONS_DIR" -name "rollout-*.jsonl" -type f 2>/dev/null \
+    | sort | tail -5
 }
 
 # Get git branch + dirty + ahead/behind for a directory
@@ -71,33 +82,83 @@ git_segment() {
 # ─── extraction ──────────────────────────────────────────────────────────────
 
 extract_state() {
-  local file="$1"
-  # Pull session_meta (first line by convention) + last token_count + last turn_context.
-  # Emit shell-readable KEY=value lines; missing fields stay unset.
-  jq -r '
-    . as $r
-    | if $r.type == "session_meta" then
-        "META_ID=" + ($r.payload.id // "")
-        , "META_CWD=" + ($r.payload.cwd // "")
-        , "META_VERSION=" + ($r.payload.cli_version // "")
-        , "META_TIMESTAMP=" + ($r.payload.timestamp // "")
-      elif $r.payload.type == "token_count" then
-        "TOK_CTX=" + (($r.payload.info.last_token_usage.input_tokens // 0) | tostring)
-        , "TOK_SESSION_TOTAL=" + (($r.payload.info.total_token_usage.total_tokens // 0) | tostring)
-        , "TOK_WINDOW=" + (($r.payload.info.model_context_window // 0) | tostring)
-        , "RL_PRIMARY_PCT=" + (($r.payload.rate_limits.primary.used_percent // "") | tostring)
-        , "RL_PRIMARY_RESET=" + (($r.payload.rate_limits.primary.resets_at // "") | tostring)
-        , "RL_PRIMARY_WIN=" + (($r.payload.rate_limits.primary.window_minutes // "") | tostring)
-        , "RL_SECONDARY_PCT=" + (($r.payload.rate_limits.secondary.used_percent // "") | tostring)
-        , "RL_SECONDARY_RESET=" + (($r.payload.rate_limits.secondary.resets_at // "") | tostring)
-        , "RL_SECONDARY_WIN=" + (($r.payload.rate_limits.secondary.window_minutes // "") | tostring)
-        , "RL_PLAN=" + ($r.payload.rate_limits.plan_type // "")
-      elif $r.type == "turn_context" then
-        "TURN_MODEL=" + ($r.payload.model // "")
-        , "TURN_EFFORT=" + ($r.payload.effort // "")
-        , "TURN_CWD=" + ($r.payload.cwd // "")
-      else empty end
-  ' "$file" 2>/dev/null
+  # Reduce the last few rollouts (oldest → newest) into a single state object.
+  # Cross-session tracking is needed because Codex emits primary=null/secondary=null
+  # the moment a limit is hit, so a session opened *after* the hit has no live
+  # data — we recover the last-known used_percent from prior sessions.
+  local files=()
+  while IFS= read -r f; do [ -n "$f" ] && files+=("$f"); done < <(find_recent_rollouts)
+  [ ${#files[@]} -eq 0 ] && return
+
+  local now
+  now=$(date +%s)
+
+  cat "${files[@]}" 2>/dev/null | jq -rn --argjson now "$now" '
+    # Threshold above which a stale-but-recent value is treated as "hit".
+    90 as $hit_thresh
+    | [inputs] as $items
+    | reduce $items[] as $r (
+        {meta_id:"", meta_cwd:"", meta_version:"",
+         tok_ctx:0, tok_window:0, tok_session_total:0,
+         rl_primary_pct:"", rl_primary_reset:"", rl_primary_win:"", rl_primary_currently_null:0,
+         rl_secondary_pct:"", rl_secondary_reset:"", rl_secondary_win:"", rl_secondary_currently_null:0,
+         rl_plan:"", rl_limit_id:"",
+         turn_model:"", turn_effort:"", turn_cwd:""};
+        if $r.type == "session_meta" then
+          .meta_id = ($r.payload.id // "")
+          | .meta_cwd = ($r.payload.cwd // "")
+          | .meta_version = ($r.payload.cli_version // "")
+        elif $r.payload.type == "token_count" then
+          .tok_ctx = ($r.payload.info.last_token_usage.input_tokens // 0)
+          | .tok_session_total = ($r.payload.info.total_token_usage.total_tokens // 0)
+          | .tok_window = ($r.payload.info.model_context_window // 0)
+          | .rl_plan = ($r.payload.rate_limits.plan_type // .rl_plan)
+          | .rl_limit_id = ($r.payload.rate_limits.limit_id // .rl_limit_id)
+          # Primary: only overwrite last-known when fresh data exists
+          | (if $r.payload.rate_limits.primary != null then
+               .rl_primary_pct = ($r.payload.rate_limits.primary.used_percent // "" | tostring)
+               | .rl_primary_reset = ($r.payload.rate_limits.primary.resets_at // "" | tostring)
+               | .rl_primary_win = ($r.payload.rate_limits.primary.window_minutes // "" | tostring)
+               | .rl_primary_currently_null = 0
+             else
+               .rl_primary_currently_null = 1
+             end)
+          # Secondary: same
+          | (if $r.payload.rate_limits.secondary != null then
+               .rl_secondary_pct = ($r.payload.rate_limits.secondary.used_percent // "" | tostring)
+               | .rl_secondary_reset = ($r.payload.rate_limits.secondary.resets_at // "" | tostring)
+               | .rl_secondary_win = ($r.payload.rate_limits.secondary.window_minutes // "" | tostring)
+               | .rl_secondary_currently_null = 0
+             else
+               .rl_secondary_currently_null = 1
+             end)
+        elif $r.type == "turn_context" then
+          .turn_model = ($r.payload.model // .turn_model)
+          | .turn_effort = ($r.payload.effort // .turn_effort)
+          | .turn_cwd = ($r.payload.cwd // .turn_cwd)
+        else . end
+      )
+    # If last-known reset has already passed, the data is stale to the point of
+    # uselessness — drop it so we render nothing rather than wrong numbers.
+    | (if (.rl_primary_reset | tonumber? // 0) > 0 and (.rl_primary_reset | tonumber) <= $now then
+         .rl_primary_pct = "" | .rl_primary_reset = "" | .rl_primary_win = ""
+       else . end)
+    | (if (.rl_secondary_reset | tonumber? // 0) > 0 and (.rl_secondary_reset | tonumber) <= $now then
+         .rl_secondary_pct = "" | .rl_secondary_reset = "" | .rl_secondary_win = ""
+       else . end)
+    # Hit: latest event has it null AND last-known pct ≥ threshold AND reset is still in the future
+    | .rl_primary_hit = (if .rl_primary_currently_null == 1
+                            and (.rl_primary_pct | tonumber? // 0) >= $hit_thresh
+                            and (.rl_primary_reset | tonumber? // 0) > $now
+                           then 1 else 0 end)
+    | .rl_primary_stale = (if .rl_primary_currently_null == 1 and .rl_primary_hit == 0 and (.rl_primary_pct | length) > 0 then 1 else 0 end)
+    | .rl_secondary_hit = (if .rl_secondary_currently_null == 1
+                              and (.rl_secondary_pct | tonumber? // 0) >= $hit_thresh
+                              and (.rl_secondary_reset | tonumber? // 0) > $now
+                             then 1 else 0 end)
+    | .rl_secondary_stale = (if .rl_secondary_currently_null == 1 and .rl_secondary_hit == 0 and (.rl_secondary_pct | length) > 0 then 1 else 0 end)
+    | to_entries[] | "\(.key | ascii_upcase)=\(.value)"
+  ' 2>/dev/null
 }
 
 # ─── render ──────────────────────────────────────────────────────────────────
@@ -118,7 +179,10 @@ render_once() {
   META_ID="" META_CWD="" META_VERSION="" META_TIMESTAMP=""
   TOK_CTX="" TOK_SESSION_TOTAL="" TOK_WINDOW=""
   RL_PRIMARY_PCT="" RL_PRIMARY_RESET="" RL_PRIMARY_WIN=""
-  RL_SECONDARY_PCT="" RL_SECONDARY_RESET="" RL_SECONDARY_WIN="" RL_PLAN=""
+  RL_PRIMARY_CURRENTLY_NULL="" RL_PRIMARY_HIT="" RL_PRIMARY_STALE=""
+  RL_SECONDARY_PCT="" RL_SECONDARY_RESET="" RL_SECONDARY_WIN=""
+  RL_SECONDARY_CURRENTLY_NULL="" RL_SECONDARY_HIT="" RL_SECONDARY_STALE=""
+  RL_PLAN="" RL_LIMIT_ID=""
   TURN_MODEL="" TURN_EFFORT="" TURN_CWD=""
 
   # Source the latest values: later lines overwrite earlier ones, so the most
@@ -154,20 +218,38 @@ render_once() {
 
   # rate limits
   local rate_parts=()
-  if [ -n "$RL_PRIMARY_PCT" ]; then
+  if [ "$RL_PRIMARY_HIT" = "1" ]; then
+    local s="5h:100%"
+    if [ -n "$RL_PRIMARY_RESET" ]; then
+      s="$s (hit, $(fmt_remaining "$RL_PRIMARY_RESET"))"
+    else
+      s="$s (hit)"
+    fi
+    rate_parts+=("$(printf '\033[1;91m%s\033[0m' "$s")")
+  elif [ -n "$RL_PRIMARY_PCT" ]; then
     local s c
     s="5h:$(printf '%.0f' "$RL_PRIMARY_PCT")%"
     [ -n "$RL_PRIMARY_RESET" ] && s="$s ($(fmt_remaining "$RL_PRIMARY_RESET"))"
     c=$(threshold_color "$RL_PRIMARY_PCT" "38;2;120;160;230")
     rate_parts+=("$(printf '\033[%sm%s\033[0m' "$c" "$s")")
   fi
-  if [ -n "$RL_SECONDARY_PCT" ]; then
+  [ "$RL_PRIMARY_STALE" = "1" ] && rate_parts[${#rate_parts[@]}-1]+=$(printf '\033[90m*\033[0m')
+  if [ "$RL_SECONDARY_HIT" = "1" ]; then
+    local s="7d:100%"
+    if [ -n "$RL_SECONDARY_RESET" ]; then
+      s="$s (hit, $(fmt_remaining "$RL_SECONDARY_RESET"))"
+    else
+      s="$s (hit)"
+    fi
+    rate_parts+=("$(printf '\033[1;91m%s\033[0m' "$s")")
+  elif [ -n "$RL_SECONDARY_PCT" ]; then
     local s c
     s="7d:$(printf '%.0f' "$RL_SECONDARY_PCT")%"
     [ -n "$RL_SECONDARY_RESET" ] && s="$s ($(fmt_remaining "$RL_SECONDARY_RESET"))"
     c=$(threshold_color "$RL_SECONDARY_PCT" "38;2;120;160;230")
     rate_parts+=("$(printf '\033[%sm%s\033[0m' "$c" "$s")")
   fi
+  [ "$RL_SECONDARY_STALE" = "1" ] && rate_parts[${#rate_parts[@]}-1]+=$(printf '\033[90m*\033[0m')
   if [ ${#rate_parts[@]} -gt 0 ]; then
     local joined="${rate_parts[0]}"
     local r
