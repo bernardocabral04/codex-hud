@@ -100,7 +100,7 @@ read_config_defaults() {
 }
 
 human_tokens() {
-  local n=$1
+  local n=${1:-0}
   if [ "$n" -ge 1000000 ]; then awk "BEGIN { printf \"%.1fM\", $n / 1000000 }"
   elif [ "$n" -ge 1000 ]; then awk "BEGIN { printf \"%.0fk\", $n / 1000 }"
   else echo "$n"
@@ -413,7 +413,7 @@ render_once() {
   fi
 
   # Reset all extractable vars before sourcing — older sessions may lack newer fields
-  META_ID="" META_CWD="" META_VERSION="" META_TIMESTAMP=""
+  META_ID="" META_CWD="" META_VERSION=""
   TOK_CTX="" TOK_SESSION_TOTAL="" TOK_WINDOW=""
   RL_PRIMARY_PCT="" RL_PRIMARY_RESET="" RL_PRIMARY_WIN=""
   RL_PRIMARY_CURRENTLY_NULL="" RL_PRIMARY_HIT="" RL_PRIMARY_STALE=""

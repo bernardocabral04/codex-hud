@@ -2,6 +2,8 @@
 
 Two independent Opus reviews, consolidated. Findings are deduplicated and grouped by severity. Line numbers reference the state of the repo at the time of review (commit `12b1721`).
 
+> **Status:** all critical, high, and medium findings have been addressed in subsequent commits. See the `git log` for `(audit #N)` markers — each fix sits in its own commit. Remaining items are low-severity correctness nuance (`#15`) or stylistic nits.
+
 ---
 
 ## Critical
