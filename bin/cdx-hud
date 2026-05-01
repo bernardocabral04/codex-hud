@@ -32,10 +32,10 @@ cwd_q=$(printf '%q' "$PWD")
 # If we're already inside tmux, just split and run codex in the current pane;
 # otherwise create a new tmux session and attach.
 if [ -n "${TMUX:-}" ]; then
-  # Split a HUD pane ABOVE the current pane, then return focus to the original.
-  hud_pane=$(tmux split-window -v -b -l "$HUD_HEIGHT" -P -F "#{pane_id}" \
+  # Split a HUD pane BELOW the current pane, then return focus to the original.
+  hud_pane=$(tmux split-window -v -l "$HUD_HEIGHT" -P -F "#{pane_id}" \
     "exec '$RENDER_BIN'")
-  tmux select-pane -D
+  tmux select-pane -U
   exec bash -c "trap 'tmux kill-pane -t $hud_pane 2>/dev/null' EXIT; cd $cwd_q && $codex_full"
 fi
 
@@ -43,9 +43,9 @@ session="${SESSION_PREFIX}-$$"
 # Main pane: codex (when codex exits, kill the whole session).
 tmux new-session -d -s "$session" -x "$(tput cols)" -y "$(tput lines)" \
   "cd $cwd_q && $codex_full; tmux kill-session -t $session"
-# Add HUD pane ABOVE the codex pane.
-tmux split-window -v -b -t "$session" -l "$HUD_HEIGHT" "exec '$RENDER_BIN'"
-# Focus codex (the lower pane).
-tmux select-pane -t "$session" -D
+# Add HUD pane BELOW the codex pane.
+tmux split-window -v -t "$session" -l "$HUD_HEIGHT" "exec '$RENDER_BIN'"
+# Focus codex (the upper pane).
+tmux select-pane -t "$session" -U
 tmux set-option -t "$session" status off >/dev/null 2>&1 || true
 exec tmux attach-session -t "$session"
