@@ -31,6 +31,21 @@ file_mtime() {
   stat $STAT_MTIME_FMT "$1" 2>/dev/null || echo 0
 }
 
+# Extract the session UUID from a rollout filename.
+#   rollout-YYYY-MM-DDTHH-MM-SS-<UUID>.jsonl  →  <UUID>
+rollout_uuid() {
+  local base=${1##*/}
+  base=${base%.jsonl}
+  echo "${base#rollout-????-??-??T??-??-??-}"
+}
+
+# Extract the session UUID from a shell-snapshot filename.
+#   <UUID>.<ns_timestamp>.sh  →  <UUID>
+snapshot_uuid() {
+  local base=${1##*/}
+  echo "${base%%.*}"
+}
+
 fmt_remaining() {
   local secs=$(( $1 - $(date +%s) ))
   (( secs <= 0 )) && { echo "now"; return; }
@@ -100,29 +115,21 @@ detect_active_session() {
       [ "$mtime" -lt "$cutoff" ] && continue
       if [ "$mtime" -gt "$newest_mtime" ]; then
         newest_mtime=$mtime
-        newest_uuid=${f##*/}
-        newest_uuid=${newest_uuid%%.*}
+        newest_uuid=$(snapshot_uuid "$f")
         newest_rollout=""
       fi
     done
   fi
 
-  # Rollouts (UUID is the trailing UUID before .jsonl)
-  local f mtime uuid
+  # Rollouts
+  local f mtime
   while IFS= read -r f; do
     [ -z "$f" ] && continue
     mtime=$(file_mtime "$f")
     [ "$mtime" -lt "$cutoff" ] && continue
     if [ "$mtime" -gt "$newest_mtime" ]; then
       newest_mtime=$mtime
-      uuid=${f##*/}
-      uuid=${uuid%.jsonl}
-      uuid=${uuid##*-}
-      # Strip trailing UUID-only suffix; filenames look like:
-      # rollout-2026-05-01T05-15-03-019de1f6-3b2c-7080-afee-c04319c63954.jsonl
-      uuid=$(printf '%s' "${f##*/}" \
-        | sed -E 's/^rollout-[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9-]+-(.+)\.jsonl$/\1/')
-      newest_uuid="$uuid"
+      newest_uuid=$(rollout_uuid "$f")
       newest_rollout="$f"
     fi
   done < <(find "$SESSIONS_DIR" -name "rollout-*.jsonl" -type f 2>/dev/null | sort | tail -10)
@@ -135,8 +142,7 @@ detect_active_session() {
     f=$(find_latest_rollout)
     if [ -n "$f" ]; then
       newest_rollout="$f"
-      newest_uuid=$(printf '%s' "${f##*/}" \
-        | sed -E 's/^rollout-[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9-]+-(.+)\.jsonl$/\1/')
+      newest_uuid=$(rollout_uuid "$f")
     fi
   fi
 
