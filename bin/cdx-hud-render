@@ -353,8 +353,11 @@ render_once() {
   local rollout
   rollout=$(find_latest_rollout)
 
-  # Home cursor + clear from cursor down (we're already in alt-screen)
-  printf '\033[H\033[J'
+  # Full-screen clear before each redraw. We use \033[2J (clear entire screen)
+  # rather than \033[J (clear-from-cursor-down) so a terminal resize that left
+  # wider stale content on lower rows doesn't bleed through — \033[K only
+  # clears one line.
+  printf '\033[2J\033[H'
 
   if [ -z "$rollout" ]; then
     printf '\033[90m(waiting for codex session…)\033[0m\n'
