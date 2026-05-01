@@ -568,13 +568,17 @@ render_once() {
     line2+=("$(printf '\033[90mNo Git\033[0m')")
   fi
 
-  # ── line 3: YOLO banner (only when active and not in loading state) ──
+  # ── line 3: YOLO banner ─────────────────────────────────────────
+  # CDX_HUD_YOLO comes from the wrapper sniffing the codex command, so it's
+  # known immediately — show the banner even during the loading state.
+  # TURN_APPROVAL / TURN_SANDBOX only become available after the first
+  # turn_context, so they're a fallback signal once data lands.
   local line3=""
-  if [ "$LOADING" != "1" ]; then
-    if [ "${CDX_HUD_YOLO:-}" = "1" ] \
-       || { [ "$TURN_APPROVAL" = "never" ] && [ "$TURN_SANDBOX" = "danger-full-access" ]; }; then
-      line3=$(printf '\033[38;2;255;94;125m▶▶ yolo mode on\033[0m')
-    fi
+  if [ "${CDX_HUD_YOLO:-}" = "1" ] \
+     || { [ "$LOADING" != "1" ] \
+          && [ "$TURN_APPROVAL" = "never" ] \
+          && [ "$TURN_SANDBOX" = "danger-full-access" ]; }; then
+    line3=$(printf '\033[38;2;255;94;125m▶▶ yolo mode on\033[0m')
   fi
 
   # ── output ────────────────────────────────────────────────────────
