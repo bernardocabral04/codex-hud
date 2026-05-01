@@ -7,7 +7,7 @@ set -u
 
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 SESSIONS_DIR="$CODEX_HOME/sessions"
-REFRESH_INTERVAL="${CDX_HUD_REFRESH:-2}"
+REFRESH_INTERVAL="${CDX_HUD_REFRESH:-5}"
 
 # Optional: pin the HUD to a specific rollout file (set by cdx-hud wrapper)
 PINNED_ROLLOUT="${CDX_HUD_ROLLOUT:-}"
