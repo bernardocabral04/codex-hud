@@ -106,8 +106,8 @@ render_once() {
   local rollout
   rollout=$(find_latest_rollout)
 
-  # ANSI: clear screen + home cursor
-  printf '\033[H\033[2J'
+  # Home cursor + clear from cursor down (we're already in alt-screen)
+  printf '\033[H\033[J'
 
   if [ -z "$rollout" ]; then
     printf '\033[90m(waiting for codex session…)\033[0m\n'
@@ -201,21 +201,23 @@ render_once() {
     for p in "${line1[@]:1}"; do
       out+=$(printf ' \033[90m|\033[0m %s' "$p")
     done
-    printf '%s\n' "$out"
+    printf '%s\033[K\n' "$out"
   fi
   if [ ${#line2[@]} -gt 0 ]; then
     out="${line2[0]}"
     for p in "${line2[@]:1}"; do
       out+=$(printf ' \033[90m|\033[0m %s' "$p")
     done
-    printf '%s\n' "$out"
+    printf '%s\033[K\n' "$out"
   fi
 }
 
 # ─── main loop ───────────────────────────────────────────────────────────────
 
-trap 'printf "\033[?25h"' EXIT  # restore cursor on exit
-printf '\033[?25l'              # hide cursor
+# Enter alternate screen (isolated buffer, no scrollback pollution) + hide cursor.
+# Restored on exit even if killed.
+trap 'printf "\033[?25h\033[?1049l"' EXIT INT TERM
+printf '\033[?1049h\033[?25l'
 
 while :; do
   render_once
