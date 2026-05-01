@@ -187,9 +187,11 @@ extract_state() {
   IFS='|' read -r active_uuid active_rollout < <(detect_active_session)
 
   # If active session has its own rollout, ensure it's processed last.
+  # The ${files[@]+"${files[@]}"} guard works around macOS bash 3.2: under
+  # `set -u`, expanding an empty "${arr[@]}" raises "unbound variable".
   if [ -n "$active_rollout" ] && [ -f "$active_rollout" ]; then
     local has=0 f
-    for f in "${files[@]}"; do
+    for f in ${files[@]+"${files[@]}"}; do
       [ "$f" = "$active_rollout" ] && has=1
     done
     if [ "$has" -eq 0 ]; then
@@ -478,7 +480,7 @@ render_once() {
   [ -n "$line3" ] && lines+=("$line3")
 
   local i=0
-  for out in "${lines[@]}"; do
+  for out in ${lines[@]+"${lines[@]}"}; do
     if [ "$i" -eq 0 ]; then
       printf '%s\033[K' "$out"
     else
