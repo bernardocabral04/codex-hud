@@ -479,12 +479,12 @@ render_once() {
   local line1=()
 
   if [ "$LOADING" = "1" ]; then
-    line1+=("$(printf '\033[38;2;167;139;250mLoading Codex session…\033[0m')")
+    line1+=("$(printf '\033[38;2;167;139;250m>_ Loading Codex session…\033[0m')")
   else
-    # model (Claude purple #a78bfa)
+    # model (Claude purple #a78bfa) prefixed with ">_" (Codex banner mark)
     local model_label="${model:-?}"
     [ -n "$effort" ] && model_label="$model_label ($effort)"
-    line1+=("$(printf '\033[38;2;167;139;250m%s\033[0m' "$model_label")")
+    line1+=("$(printf '\033[38;2;167;139;250m>_ %s\033[0m' "$model_label")")
   fi
 
   # context % — based on last input tokens vs model context window
