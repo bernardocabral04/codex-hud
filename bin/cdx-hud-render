@@ -590,11 +590,26 @@ render_once() {
   # line 1 wrap to two rows, pushing line-1's head past the pane top. Drop
   # trailing segments greedily until what's left fits in one row. Earlier
   # segments (model, context) win priority over later ones (session id).
-  local pane_width
-  pane_width=$(tput cols 2>/dev/null)
+  # Pane width detection. tput cols is unreliable here: when this function's
+  # output is captured via $(...), tput sees a pipe instead of a tty and
+  # silently falls back to the terminfo default (80) — making the HUD think
+  # the pane is wider than it really is, so we under-truncate and the pane
+  # clips the right edge. Source the width from tmux instead, which queries
+  # the server directly. stty as a secondary fallback.
+  local pane_width=""
+  if command -v tmux >/dev/null 2>&1; then
+    pane_width=$(tmux display-message -p '#{pane_width}' 2>/dev/null)
+  fi
+  if [ -z "$pane_width" ] || [ "$pane_width" = "0" ]; then
+    pane_width=$(stty size </dev/tty 2>/dev/null | awk '{print $2}')
+  fi
+  if [ -z "$pane_width" ] || [ "$pane_width" = "0" ]; then
+    pane_width=$(tput cols 2>/dev/null)
+  fi
   : "${pane_width:=80}"
   local available=$((pane_width - 4))  # 2-space left margin + safety
   [ "$available" -lt 10 ] && available=10
+  debug_log "render: pane_width=$pane_width available=$available"
 
   # Visible-length measurement for ANSI-styled strings. Single sed call.
   visible_len() {
