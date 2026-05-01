@@ -294,7 +294,8 @@ extract_state() {
          | .turn_approval = "" | .turn_sandbox = ""
        else . end)
     | . + {loading: $loading}
-    | to_entries[] | "\(.key | ascii_upcase)=\(.value)"
+    # Tab-separated KEY \t VALUE so the bash side can read without eval.
+    | to_entries[] | "\(.key | ascii_upcase)\t\(.value)"
   ' 2>/dev/null
 }
 
@@ -323,11 +324,15 @@ render_once() {
   TURN_MODEL="" TURN_EFFORT="" TURN_CWD=""
   TURN_APPROVAL="" TURN_SANDBOX=""
 
-  # Source the latest values: later lines overwrite earlier ones, so the most
-  # recent token_count / turn_context wins.
-  while IFS= read -r line; do
-    [ -z "$line" ] && continue
-    eval "$line"
+  # Read tab-separated KEY \t VALUE pairs from extract_state. We deliberately
+  # avoid eval so a path/model/cwd containing $(…), backticks, ; or quotes
+  # cannot execute. Key is whitelist-validated; value is set via printf -v.
+  local _k _v
+  while IFS=$'\t' read -r _k _v; do
+    [ -z "$_k" ] && continue
+    case "$_k" in
+      [A-Z_][A-Z0-9_]*) printf -v "$_k" '%s' "$_v" ;;
+    esac
   done < <(extract_state "$rollout")
 
   local cwd="${TURN_CWD:-${META_CWD:-$PWD}}"
