@@ -4,8 +4,9 @@
 
 set -u
 
-# Default to your existing alias behavior. Override via CDX_HUD_CODEX_CMD.
-CODEX_CMD="${CDX_HUD_CODEX_CMD:-codex --dangerously-bypass-approvals-and-sandbox}"
+# Default to plain codex. Set CDX_HUD_CODEX_CMD to switch to YOLO mode
+# or any other invocation (see the cdx / cdxy zsh aliases).
+CODEX_CMD="${CDX_HUD_CODEX_CMD:-codex}"
 HUD_HEIGHT="${CDX_HUD_HEIGHT:-3}"
 SESSION_PREFIX="${CDX_HUD_SESSION_PREFIX:-cdxhud}"
 
