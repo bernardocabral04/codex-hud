@@ -435,24 +435,35 @@ render_once() {
   fi
 
   # ── output ────────────────────────────────────────────────────────
-  local out p
+  # Build all rendered lines into an array; print with `\n` BETWEEN them
+  # (no trailing newline), so cursor stays inside the pane's visible area
+  # and the first line never scrolls off the top.
+  local lines=() out p
   if [ ${#line1[@]} -gt 0 ]; then
     out="${line1[0]}"
     for p in "${line1[@]:1}"; do
       out+=$(printf ' \033[90m|\033[0m %s' "$p")
     done
-    printf '%s\033[K\n' "$out"
+    lines+=("$out")
   fi
   if [ ${#line2[@]} -gt 0 ]; then
     out="${line2[0]}"
     for p in "${line2[@]:1}"; do
       out+=$(printf ' \033[90m|\033[0m %s' "$p")
     done
-    printf '%s\033[K\n' "$out"
+    lines+=("$out")
   fi
-  if [ -n "$line3" ]; then
-    printf '%s\033[K\n' "$line3"
-  fi
+  [ -n "$line3" ] && lines+=("$line3")
+
+  local i=0
+  for out in "${lines[@]}"; do
+    if [ "$i" -eq 0 ]; then
+      printf '%s\033[K' "$out"
+    else
+      printf '\n%s\033[K' "$out"
+    fi
+    i=$((i + 1))
+  done
 }
 
 # ─── main loop ───────────────────────────────────────────────────────────────
