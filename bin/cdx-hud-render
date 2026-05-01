@@ -121,6 +121,19 @@ find_latest_rollout() {
 # Returns: "<UUID>|<rollout_path_or_empty>" — empty rollout path means the
 # session has no JSONL events yet (just opened).
 detect_active_session() {
+  # Once we've resolved a stable session (UUID + actual rollout path), pin it
+  # for the lifetime of this render process. The render's lifetime is tied to
+  # one cdx-hud invocation by the EXIT trap and the codex-pane watchdog, so
+  # the active session genuinely cannot change underneath us. Pinning prevents
+  # two concurrent cdx instances launched within the cutoff slack window from
+  # stealing each other's session, and skips three find/scan operations per
+  # tick once we're locked in.
+  if [ -n "${_PINNED_UUID:-}" ] && [ -n "${_PINNED_ROLLOUT:-}" ] \
+     && [ -f "$_PINNED_ROLLOUT" ]; then
+    printf '%s|%s\n' "$_PINNED_UUID" "$_PINNED_ROLLOUT"
+    return
+  fi
+
   local cutoff="${CDX_HUD_START_EPOCH:-0}"
   # Allow ~5s of clock-skew slack so rollouts created right before the wrapper
   # ran still count if their first event is mid-flight.
@@ -169,6 +182,16 @@ detect_active_session() {
   fi
 
   debug_log "detect_active_session: uuid=${newest_uuid:-<none>} rollout=${newest_rollout:-<none>} cutoff=$cutoff"
+
+  # Pin only when we have BOTH a UUID and a rollout file; the pure-snapshot case
+  # (UUID known, rollout not yet flushed) stays unpinned so we keep polling for
+  # the rollout to appear.
+  if [ -n "$newest_uuid" ] && [ -n "$newest_rollout" ]; then
+    _PINNED_UUID="$newest_uuid"
+    _PINNED_ROLLOUT="$newest_rollout"
+    debug_log "detect_active_session: pinned for the rest of this render"
+  fi
+
   printf '%s|%s\n' "$newest_uuid" "$newest_rollout"
 }
 
