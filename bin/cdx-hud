@@ -72,9 +72,12 @@ dispatch_file=$(mktemp -t cdxhud.XXXXXX)
 chmod +x "$dispatch_file"
 cat > "$dispatch_file" <<EOF
 #!/usr/bin/env bash
+# NOTE: do NOT 'exec' codex here — exec replaces the bash process and the
+# EXIT trap goes with it, so 'tmux kill-session' would never fire and the
+# HUD pane would orphan after codex quits. Run codex as a child instead.
 trap "rm -f -- $(printf '%q' "$dispatch_file"); tmux kill-session -t $(printf '%q' "$session") 2>/dev/null" EXIT INT TERM HUP
 cd $cwd_q
-exec $codex_full
+$codex_full
 EOF
 tmux new-session -d -s "$session" -x "$(tput cols)" -y "$(tput lines)" "$dispatch_file"
 # Capture the codex pane id (the only pane in the session right now) so the
