@@ -108,10 +108,23 @@ extract_state() {
           .meta_id = ($r.payload.id // "")
           | .meta_cwd = ($r.payload.cwd // "")
           | .meta_version = ($r.payload.cli_version // "")
+          # Reset per-session live state when crossing session boundaries.
+          # tok_window stays since it is a model property that survives sessions.
+          | .tok_ctx = 0
+          | .tok_session_total = 0
+          | .turn_model = ""
+          | .turn_effort = ""
+          | .turn_cwd = ""
         elif $r.payload.type == "token_count" then
-          .tok_ctx = ($r.payload.info.last_token_usage.input_tokens // 0)
-          | .tok_session_total = ($r.payload.info.total_token_usage.total_tokens // 0)
-          | .tok_window = ($r.payload.info.model_context_window // 0)
+          # Token usage block is null when the session opens already rate-limited.
+          # Only overwrite when fresh data exists; otherwise preserve last known.
+          (if $r.payload.info != null then
+             .tok_ctx = ($r.payload.info.last_token_usage.input_tokens // 0)
+             | .tok_session_total = ($r.payload.info.total_token_usage.total_tokens // 0)
+             | (if ($r.payload.info.model_context_window // 0) > 0 then
+                  .tok_window = $r.payload.info.model_context_window
+                else . end)
+           else . end)
           | .rl_plan = ($r.payload.rate_limits.plan_type // .rl_plan)
           | .rl_limit_id = ($r.payload.rate_limits.limit_id // .rl_limit_id)
           # Primary: only overwrite last-known when fresh data exists
