@@ -122,16 +122,24 @@ find_latest_rollout() {
 # session has no JSONL events yet (just opened).
 detect_active_session() {
   # Once we've resolved a stable session (UUID + actual rollout path), pin it
-  # for the lifetime of this render process. The render's lifetime is tied to
-  # one cdx-hud invocation by the EXIT trap and the codex-pane watchdog, so
-  # the active session genuinely cannot change underneath us. Pinning prevents
-  # two concurrent cdx instances launched within the cutoff slack window from
-  # stealing each other's session, and skips three find/scan operations per
-  # tick once we're locked in.
+  # to skip find/scan operations per tick and to prevent two concurrent cdx
+  # instances launched within the cutoff slack window from stealing each
+  # other's session.
+  #
+  # BUT — codex's /resume command opens a previous rollout file in-place
+  # (same wrapper, same render process). That older rollout's mtime jumps
+  # forward when codex starts appending. Detect this by checking whether ANY
+  # other rollout has been touched more recently than the pinned one; if so,
+  # invalidate the pin and re-detect.
   if [ -n "${_PINNED_UUID:-}" ] && [ -n "${_PINNED_ROLLOUT:-}" ] \
      && [ -f "$_PINNED_ROLLOUT" ]; then
-    printf '%s|%s\n' "$_PINNED_UUID" "$_PINNED_ROLLOUT"
-    return
+    if [ -z "$(find "$SESSIONS_DIR" -name 'rollout-*.jsonl' -type f -newer "$_PINNED_ROLLOUT" 2>/dev/null | head -1)" ]; then
+      printf '%s|%s\n' "$_PINNED_UUID" "$_PINNED_ROLLOUT"
+      return
+    fi
+    debug_log "detect_active_session: pin invalidated — newer rollout detected (likely /resume)"
+    _PINNED_UUID=""
+    _PINNED_ROLLOUT=""
   fi
 
   local cutoff="${CDX_HUD_START_EPOCH:-0}"
