@@ -482,7 +482,11 @@ render_once() {
     line1+=("$(printf '\033[38;2;167;139;250m>_ Loading Codex session…\033[0m')")
   else
     # model (Claude purple #a78bfa) prefixed with ">_" (Codex banner mark)
+    # Format: ">_ gpt-5.5 258k (xhigh)" — context window before effort.
     local model_label="${model:-?}"
+    if [ -n "$TOK_WINDOW" ] && [ "$TOK_WINDOW" -gt 0 ]; then
+      model_label="$model_label $(human_tokens "$TOK_WINDOW")"
+    fi
     [ -n "$effort" ] && model_label="$model_label ($effort)"
     line1+=("$(printf '\033[38;2;167;139;250m>_ %s\033[0m' "$model_label")")
   fi
