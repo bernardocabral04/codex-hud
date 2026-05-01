@@ -540,7 +540,9 @@ LOADING_REFRESH="${CDX_HUD_LOADING_REFRESH:-0.3}"
 codex_pane_gone() {
   [ -z "${CDX_HUD_CODEX_PANE:-}" ] && return 1
   command -v tmux >/dev/null 2>&1 || return 1
-  ! tmux list-panes -a -F '#{pane_id}' 2>/dev/null | grep -qFx "$CDX_HUD_CODEX_PANE"
+  # list-panes -t <pane> exits non-zero with "can't find pane" when the target
+  # is gone. Targeted lookup, no scan over every pane on the tmux server.
+  ! tmux list-panes -t "$CDX_HUD_CODEX_PANE" >/dev/null 2>&1
 }
 
 while :; do
