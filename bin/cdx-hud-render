@@ -238,17 +238,21 @@ extract_state() {
   local active_uuid="" active_rollout=""
   IFS='|' read -r active_uuid active_rollout < <(detect_active_session)
 
-  # If active session has its own rollout, ensure it's processed last.
+  # If the active session has its own rollout, force it to be processed LAST
+  # in jq order — irrespective of where filename-sort placed it. find_recent_rollouts
+  # sorts by name; codex's /resume command resumes a previous (older-named)
+  # rollout while keeping it filename-stable, so without this re-ordering the
+  # LAST session_meta jq sees would belong to whichever rollout sorted last by
+  # filename, not the one the user is actually in.
   # The ${files[@]+"${files[@]}"} guard works around macOS bash 3.2: under
   # `set -u`, expanding an empty "${arr[@]}" raises "unbound variable".
   if [ -n "$active_rollout" ] && [ -f "$active_rollout" ]; then
-    local has=0 f
+    local filtered=() f
     for f in ${files[@]+"${files[@]}"}; do
-      [ "$f" = "$active_rollout" ] && has=1
+      [ "$f" != "$active_rollout" ] && filtered+=("$f")
     done
-    if [ "$has" -eq 0 ]; then
-      files+=("$active_rollout")
-    fi
+    filtered+=("$active_rollout")
+    files=(${filtered[@]+"${filtered[@]}"})
   fi
 
   # Cache by mtime signature: if every input file's mtime is unchanged from
