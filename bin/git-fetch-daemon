@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# git-fetch-daemon — periodically `git fetch` so codex-hud's ↑n ↓n indicator
+# reflects remote state instead of just the last manual fetch.
+# Per-repo singleton; safe to spawn redundantly. Self-exits on idle.
+
+set -u
+
+REPO="${1:-}"
+[ -z "$REPO" ] && exit 1
+git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1 || exit 1
+
+CACHE_DIR="${CDX_HUD_GIT_FETCH_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/codex-hud/git-fetch}"
+mkdir -p "$CACHE_DIR"
+key=$(printf '%s' "$REPO" | shasum | awk '{print $1}')
+PID_FILE="$CACHE_DIR/$key.pid"
+HEARTBEAT="$CACHE_DIR/$key.heartbeat"
+LOG_FILE="$CACHE_DIR/$key.log"
+INTERVAL="${CDX_HUD_GIT_FETCH_INTERVAL:-5}"
+IDLE_EXIT="${CDX_HUD_GIT_FETCH_IDLE_EXIT:-1800}"
+
+# stat(1) flag for mtime in epoch seconds. BSD/macOS uses -f %m, GNU uses -c %Y.
+if stat -f %m / >/dev/null 2>&1; then
+  STAT_MTIME_FMT="-f %m"
+elif stat -c %Y / >/dev/null 2>&1; then
+  STAT_MTIME_FMT="-c %Y"
+else
+  exit 1
+fi
+if stat -f %z / >/dev/null 2>&1; then
+  STAT_SIZE_FMT="-f %z"
+else
+  STAT_SIZE_FMT="-c %s"
+fi
+
+# Singleton via atomic link. Write PID to a tempfile first, then `ln tmp pid`
+# is atomic — the file is observable only after it has content, so a racing
+# loser can't read an empty PID and mistake the winner for stale.
+# (`set -C; echo > file` looks atomic but the file is briefly empty between
+# open() and write(), which is enough to break the stale-detection branch.)
+acquire_lock() {
+  local tmp="$PID_FILE.tmp.$$"
+  echo "$$" > "$tmp"
+  if ln "$tmp" "$PID_FILE" 2>/dev/null; then
+    rm -f "$tmp"
+    return 0
+  fi
+  rm -f "$tmp"
+  local pid
+  pid=$(cat "$PID_FILE" 2>/dev/null)
+  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+    return 1  # active daemon already running
+  fi
+  # Stale (owner SIGKILL'd without trap cleanup). Best-effort reclaim — under
+  # rare contention two daemons may briefly coexist; both will eventually idle-exit.
+  rm -f "$PID_FILE"
+  echo "$$" > "$tmp"
+  if ln "$tmp" "$PID_FILE" 2>/dev/null; then
+    rm -f "$tmp"
+    return 0
+  fi
+  rm -f "$tmp"
+  return 1
+}
+acquire_lock || exit 0
+trap 'rm -f "$PID_FILE"' EXIT INT TERM HUP
+
+# Never block on credential prompts; never invoke a pager; never auto-gc mid-fetch.
+export GIT_TERMINAL_PROMPT=0
+export GIT_ASKPASS=/bin/true
+export SSH_ASKPASS=/bin/true
+export GIT_PAGER=cat
+
+# Cap the log so a misconfigured remote can't fill the disk over weeks of failed fetches.
+trim_log() {
+  [ -f "$LOG_FILE" ] || return 0
+  local size
+  size=$(stat $STAT_SIZE_FMT "$LOG_FILE" 2>/dev/null || echo 0)
+  if [ "$size" -gt 65536 ]; then
+    tail -c 32768 "$LOG_FILE" > "$LOG_FILE.tmp" && mv -f "$LOG_FILE.tmp" "$LOG_FILE"
+  fi
+}
+
+while true; do
+  # Only fetch when an upstream is configured (else nothing to compare against).
+  if git -C "$REPO" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' \
+       >/dev/null 2>&1; then
+    git -C "$REPO" -c gc.auto=0 fetch --quiet --no-tags --prune \
+      2>>"$LOG_FILE" || true
+    trim_log
+  fi
+
+  # Self-exit when the HUD has stopped touching the heartbeat (codex closed,
+  # repo abandoned). Daemon respawns on next render.
+  if [ -f "$HEARTBEAT" ]; then
+    last=$(stat $STAT_MTIME_FMT "$HEARTBEAT" 2>/dev/null || echo 0)
+    age=$(( $(date +%s) - last ))
+    if [ "$age" -gt "$IDLE_EXIT" ]; then
+      exit 0
+    fi
+  fi
+
+  sleep "$INTERVAL"
+done

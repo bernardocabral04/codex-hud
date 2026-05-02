@@ -234,11 +234,46 @@ find_recent_rollouts() {
     | sort | tail -5
 }
 
-# Get git branch + dirty + ahead/behind for a directory
+# Get git branch + dirty + ahead/behind for a directory.
+# Side effect: spawns/heartbeats a per-repo background fetch daemon so the
+# ahead/behind math (which reads @{upstream}) reflects remote state, not just
+# the last manual fetch. Daemon self-exits on idle; see bin/git-fetch-daemon.
+GIT_FETCH_DAEMON_BIN=""
+GIT_FETCH_LAST_CWD=""
+GIT_FETCH_LAST_KEY=""
+
+ensure_git_fetch_daemon() {
+  # Skip entirely if the user opted out, or the daemon binary is missing.
+  [ "${CDX_HUD_GIT_FETCH:-1}" = "0" ] && return
+  if [ -z "$GIT_FETCH_DAEMON_BIN" ]; then
+    local script_dir
+    script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+    GIT_FETCH_DAEMON_BIN="$script_dir/git-fetch-daemon"
+  fi
+  [ -x "$GIT_FETCH_DAEMON_BIN" ] || return
+  local cwd="$1"
+  # Memoize the hash so we are not running shasum on every 5s tick.
+  if [ "$cwd" != "$GIT_FETCH_LAST_CWD" ]; then
+    GIT_FETCH_LAST_CWD="$cwd"
+    GIT_FETCH_LAST_KEY=$(printf '%s' "$cwd" | shasum 2>/dev/null | awk '{print $1}')
+  fi
+  [ -z "$GIT_FETCH_LAST_KEY" ] && return
+  local cache_dir="${CDX_HUD_GIT_FETCH_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/codex-hud/git-fetch}"
+  mkdir -p "$cache_dir" 2>/dev/null || return
+  touch "$cache_dir/$GIT_FETCH_LAST_KEY.heartbeat" 2>/dev/null
+  local pid_file="$cache_dir/$GIT_FETCH_LAST_KEY.pid"
+  if [ ! -f "$pid_file" ] || ! kill -0 "$(cat "$pid_file" 2>/dev/null)" 2>/dev/null; then
+    CDX_HUD_GIT_FETCH_CACHE="$cache_dir" \
+      nohup bash "$GIT_FETCH_DAEMON_BIN" "$cwd" >/dev/null 2>&1 &
+    disown 2>/dev/null || true
+  fi
+}
+
 git_segment() {
   local cwd="$1"
   [ -z "$cwd" ] || [ ! -d "$cwd" ] && return
   git -C "$cwd" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return
+  ensure_git_fetch_daemon "$cwd"
   local branch dirty ab a b ahead_behind=""
   branch=$(git -C "$cwd" -c gc.auto=0 symbolic-ref --short HEAD 2>/dev/null \
     || git -C "$cwd" rev-parse --short HEAD 2>/dev/null)

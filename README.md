@@ -41,6 +41,10 @@ alias cdxy="CDX_HUD_CODEX_CMD='codex --dangerously-bypass-approvals-and-sandbox'
 | `CDX_HUD_START_EPOCH` | (auto) | Unix epoch when the wrapper launched, used to ignore older rollouts. Set by the wrapper. |
 | `CODEX_HOME` | `$HOME/.codex` | Codex's data directory. Honored by the render. |
 | `CDX_HUD_DEBUG` | `0` | Set to `1` to log detection + per-tick state to `$CODEX_HOME/cdx-hud-debug.log`. `tail -f` it while reproducing an issue. |
+| `CDX_HUD_GIT_FETCH` | `1` | Set to `0` to disable the background `git fetch` daemon (the thing that keeps `↑n ↓n` accurate). |
+| `CDX_HUD_GIT_FETCH_INTERVAL` | `5` | Seconds between background fetches. Increase on metered/cellular networks. |
+| `CDX_HUD_GIT_FETCH_IDLE_EXIT` | `1800` | Seconds without a render heartbeat before the fetch daemon self-exits. |
+| `CDX_HUD_GIT_FETCH_CACHE` | `${XDG_CACHE_HOME:-~/.cache}/codex-hud/git-fetch` | Cache dir for fetch-daemon PID files, heartbeats, and per-repo error logs. |
 
 ## Display
 
@@ -51,6 +55,8 @@ Lines (top → bottom):
 3. `▶▶ yolo mode on` — only when YOLO mode is active
 
 A trailing `*` after a rate-limit segment means the value is **stale** (last-known from a prior session — the active session has reported `null` for that window).
+
+The `↑n ↓n` markers reflect the most recent fetched state of `@{upstream}`. A small per-repo daemon (`bin/git-fetch-daemon`) runs `git fetch` in the background every 5 s while the HUD is open so you don't need to fetch manually. It only fires when the repo has an upstream configured, never prompts for credentials (`GIT_TERMINAL_PROMPT=0`), self-exits after 30 min of HUD inactivity, and can be disabled with `CDX_HUD_GIT_FETCH=0`.
 
 ## Color palette
 
