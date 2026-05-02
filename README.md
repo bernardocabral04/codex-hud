@@ -39,6 +39,7 @@ alias cdxy="CDX_HUD_CODEX_CMD='codex --dangerously-bypass-approvals-and-sandbox'
 | `CDX_HUD_YOLO` | (auto) | Force the YOLO banner. The wrapper sets this when it sees `--dangerously-bypass-approvals-and-sandbox`. |
 | `CDX_HUD_CODEX_PANE` | (auto) | tmux pane id of the codex pane. The wrapper sets this so the render can self-exit when codex's pane is gone. |
 | `CDX_HUD_START_EPOCH` | (auto) | Unix epoch when the wrapper launched, used to ignore older rollouts. Set by the wrapper. |
+| `CDX_HUD_LAUNCH_CWD` | (auto) | The wrapper's `$PWD` at spawn time. Used as the cwd fallback before codex flushes its first rollout JSONL — without this, a brand-new session would render `~/` until the user sent a turn. |
 | `CODEX_HOME` | `$HOME/.codex` | Codex's data directory. Honored by the render. |
 | `CDX_HUD_DEBUG` | `0` | Set to `1` to log detection + per-tick state to `$CODEX_HOME/cdx-hud-debug.log`. `tail -f` it while reproducing an issue. |
 | `CDX_HUD_GIT_FETCH` | `1` | Set to `0` to disable the background `git fetch` daemon (the thing that keeps `↑n ↓n` accurate). |

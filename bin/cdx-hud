@@ -59,7 +59,7 @@ if [ -n "${TMUX:-}" ]; then
   codex_pane=$(tmux display-message -p '#{pane_id}')
   # Split a HUD pane BELOW the current pane, then return focus to the original.
   hud_pane=$(tmux split-window -v -l "$HUD_HEIGHT" -P -F "#{pane_id}" \
-    "CDX_HUD_START_EPOCH=$start_epoch CDX_HUD_CODEX_PANE=$codex_pane $yolo_hint exec $render_bin_q")
+    "CDX_HUD_START_EPOCH=$start_epoch CDX_HUD_CODEX_PANE=$codex_pane CDX_HUD_LAUNCH_CWD=$cwd_q $yolo_hint exec $render_bin_q")
   tmux select-pane -U
   # Pin HUD height across terminal resizes (zoom in/out) — tmux's default
   # behavior is proportional shrink, which would clip our content.
@@ -99,7 +99,7 @@ tmux new-session -d -s "$session" -x "$(tput cols)" -y "$(tput lines)" "$dispatc
 codex_pane=$(tmux list-panes -t "$session" -F '#{pane_id}' | head -1)
 # Add HUD pane BELOW the codex pane.
 hud_pane=$(tmux split-window -v -t "$session" -l "$HUD_HEIGHT" -P -F "#{pane_id}" \
-  "CDX_HUD_START_EPOCH=$start_epoch CDX_HUD_CODEX_PANE=$codex_pane $yolo_hint exec $render_bin_q")
+  "CDX_HUD_START_EPOCH=$start_epoch CDX_HUD_CODEX_PANE=$codex_pane CDX_HUD_LAUNCH_CWD=$cwd_q $yolo_hint exec $render_bin_q")
 # Pin HUD height across terminal resizes — without these hooks, tmux shrinks
 # both panes proportionally on zoom-in and the HUD content gets clipped.
 tmux set-hook -t "$session" client-resized \

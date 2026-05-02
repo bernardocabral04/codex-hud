@@ -500,7 +500,15 @@ render_once() {
   done < <(extract_state "$rollout")
   debug_log "render: meta_id=${META_ID:-<empty>} model=${TURN_MODEL:-<empty>} loading=${LOADING:-<empty>} ctx=${TOK_CTX:-<empty>}/${TOK_WINDOW:-<empty>} 5h=${RL_PRIMARY_PCT:-<empty>}(hit=${RL_PRIMARY_HIT:-0}) 7d=${RL_SECONDARY_PCT:-<empty>}(hit=${RL_SECONDARY_HIT:-0})"
 
-  local cwd="${TURN_CWD:-${META_CWD:-$PWD}}"
+  # Cwd resolution chain (most-specific → least-specific):
+  #   TURN_CWD       — current turn's cwd (rollout turn_context)
+  #   META_CWD       — session-level cwd (rollout session_meta)
+  #   LAUNCH_CWD     — what the cdx-hud wrapper knew at spawn ($PWD when the
+  #                    user typed `cdxy`). Bridges the gap on a brand-new
+  #                    session before codex flushes its first rollout JSONL.
+  #   $PWD           — last resort (this render's own cwd, usually $HOME
+  #                    because tmux panes spawn there).
+  local cwd="${TURN_CWD:-${META_CWD:-${CDX_HUD_LAUNCH_CWD:-$PWD}}}"
 
   # Fall back to config.toml defaults when the rollout has no turn_context yet.
   local default_model="" default_effort=""
