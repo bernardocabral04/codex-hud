@@ -46,6 +46,16 @@ alias cdxy="CDX_HUD_CODEX_CMD='codex --dangerously-bypass-approvals-and-sandbox'
 | `CDX_HUD_GIT_FETCH_INTERVAL` | `5` | Seconds between background fetches. Increase on metered/cellular networks. |
 | `CDX_HUD_GIT_FETCH_IDLE_EXIT` | `1800` | Seconds without a render heartbeat before the fetch daemon self-exits. |
 | `CDX_HUD_GIT_FETCH_CACHE` | `${XDG_CACHE_HOME:-~/.cache}/codex-hud/git-fetch` | Cache dir for fetch-daemon PID files, heartbeats, and per-repo error logs. |
+| `CDX_HUD_NETWORK` | `1` | Set to `0` to disable the background network-status daemon and the inline indicator on line 2. |
+| `CDX_HUD_NETWORK_TARGET` | `1.1.1.1` | Ping target. Anything reachable from your machine works; pick a server you don't mind probing every 5 s. |
+| `CDX_HUD_NETWORK_INTERVAL` | `5` | Seconds between probes. |
+| `CDX_HUD_NETWORK_PING_TIMEOUT` | `2` | Per-probe timeout (seconds). |
+| `CDX_HUD_NETWORK_SLOW_MS` | `300` | Latency threshold (ms) for the `slow` indicator. |
+| `CDX_HUD_NETWORK_OFFLINE_THRESHOLD` | `3` | Consecutive failed probes before flipping to `offline`. |
+| `CDX_HUD_NETWORK_SLOW_COUNT` | `2` | Consecutive slow probes before flipping to `slow`. |
+| `CDX_HUD_NETWORK_RECONNECTED_DURATION` | `5` | Seconds the green `Reconnected` indicator lingers after coming back from `offline`. |
+| `CDX_HUD_NETWORK_IDLE_EXIT` | `1800` | Seconds without a render heartbeat before the network daemon self-exits. |
+| `CDX_HUD_NETWORK_CACHE` | `${XDG_CACHE_HOME:-~/.cache}/codex-hud/network` | Cache dir for the network daemon's PID file, heartbeat, and state file. |
 
 ## Display
 
@@ -58,6 +68,8 @@ Lines (top → bottom):
 A trailing `*` after a rate-limit segment means the value is **stale** (last-known from a prior session — the active session has reported `null` for that window).
 
 The `↑n ↓n` markers reflect the most recent fetched state of `@{upstream}`. A small per-repo daemon (`bin/git-fetch-daemon`) runs `git fetch` in the background every 5 s while the HUD is open so you don't need to fetch manually. It only fires when the repo has an upstream configured, never prompts for credentials (`GIT_TERMINAL_PROMPT=0`), self-exits after 30 min of HUD inactivity, and can be disabled with `CDX_HUD_GIT_FETCH=0`.
+
+A sibling daemon (`bin/network-daemon`) pings a target every 5 s and writes the result to a small state file. Line 2 picks it up and appends an inline segment when the network is **offline** (red `✗ Not connected`), **slow** (yellow `⚠ Slow connection`, latency over 300 ms for two probes in a row), or **reconnected** (green `✔ Reconnected`, lingers for 5 s after coming back). When the connection is healthy the segment is silent so the line stays clean. Same atomic-link locking, same heartbeat-driven idle exit (30 min), same disable knob (`CDX_HUD_NETWORK=0`).
 
 ## Color palette
 

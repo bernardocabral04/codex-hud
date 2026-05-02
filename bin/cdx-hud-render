@@ -269,6 +269,53 @@ ensure_git_fetch_daemon() {
   fi
 }
 
+# Network status — same daemon shape as git-fetch-daemon (atomic-link lock,
+# heartbeat-driven idle exit). Spawned lazily on first render; reads a small
+# state file each tick. Silent when online; renders an inline segment on
+# offline / slow / reconnected.
+NETWORK_DAEMON_BIN=""
+
+ensure_network_daemon() {
+  [ "${CDX_HUD_NETWORK:-1}" = "0" ] && return
+  if [ -z "$NETWORK_DAEMON_BIN" ]; then
+    local script_dir
+    script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+    NETWORK_DAEMON_BIN="$script_dir/network-daemon"
+  fi
+  [ -x "$NETWORK_DAEMON_BIN" ] || return
+  local cache_dir="${CDX_HUD_NETWORK_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/codex-hud/network}"
+  mkdir -p "$cache_dir" 2>/dev/null || return
+  touch "$cache_dir/heartbeat" 2>/dev/null
+  local pid_file="$cache_dir/daemon.pid"
+  if [ ! -f "$pid_file" ] || ! kill -0 "$(cat "$pid_file" 2>/dev/null)" 2>/dev/null; then
+    CDX_HUD_NETWORK_CACHE="$cache_dir" \
+      nohup bash "$NETWORK_DAEMON_BIN" >/dev/null 2>&1 &
+    disown 2>/dev/null || true
+  fi
+}
+
+# Returns a colored network label (offline / slow / reconnected) or empty
+# when online or when the state file is stale (>30s old, daemon stalled).
+network_segment() {
+  [ "${CDX_HUD_NETWORK:-1}" = "0" ] && return
+  local cache_dir="${CDX_HUD_NETWORK_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/codex-hud/network}"
+  local state_file="$cache_dir/status"
+  [ -f "$state_file" ] || return
+  # Daemon writes only KEY=value with whitelisted state values
+  # (online|slow|offline|reconnected) and integer latency/timestamp,
+  # so source-style read is safe — same pattern Claude's statusline uses.
+  local STATE="" LATENCY="" TIMESTAMP=""
+  # shellcheck disable=SC1090
+  source "$state_file" 2>/dev/null
+  local age=$(( $(date +%s) - ${TIMESTAMP:-0} ))
+  [ "$age" -gt 30 ] && return
+  case "$STATE" in
+    offline)     printf '\033[31m✗ Not connected\033[0m' ;;
+    slow)        printf '\033[33m⚠ Slow connection\033[0m' ;;
+    reconnected) printf '\033[32m✔ Reconnected\033[0m' ;;
+  esac
+}
+
 git_segment() {
   local cwd="$1"
   [ -z "$cwd" ] || [ ! -d "$cwd" ] && return
@@ -613,6 +660,12 @@ render_once() {
   else
     line2+=("$(printf '\033[90mNo Git\033[0m')")
   fi
+
+  # Network status — last on line 2 so fit_join drops it first under width pressure.
+  ensure_network_daemon
+  local net_label
+  net_label=$(network_segment)
+  [ -n "$net_label" ] && line2+=("$net_label")
 
   # ── line 3: YOLO banner ─────────────────────────────────────────
   # CDX_HUD_YOLO comes from the wrapper sniffing the codex command, so it's

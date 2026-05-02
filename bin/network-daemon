@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+# network-daemon — pings a target every N seconds and writes a state file
+# (online | slow | offline | reconnected) the HUD reads each render tick.
+# Singleton; idle-exits when the HUD stops touching the heartbeat.
+
+set -u
+
+CACHE_DIR="${CDX_HUD_NETWORK_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/codex-hud/network}"
+mkdir -p "$CACHE_DIR" 2>/dev/null || exit 1
+PID_FILE="$CACHE_DIR/daemon.pid"
+STATE_FILE="$CACHE_DIR/status"
+HEARTBEAT="$CACHE_DIR/heartbeat"
+
+PING_TARGET="${CDX_HUD_NETWORK_TARGET:-1.1.1.1}"
+PING_TIMEOUT="${CDX_HUD_NETWORK_PING_TIMEOUT:-2}"
+INTERVAL="${CDX_HUD_NETWORK_INTERVAL:-5}"
+SLOW_THRESHOLD_MS="${CDX_HUD_NETWORK_SLOW_MS:-300}"
+OFFLINE_THRESHOLD="${CDX_HUD_NETWORK_OFFLINE_THRESHOLD:-3}"
+SLOW_THRESHOLD_COUNT="${CDX_HUD_NETWORK_SLOW_COUNT:-2}"
+RECONNECTED_DURATION="${CDX_HUD_NETWORK_RECONNECTED_DURATION:-5}"
+IDLE_EXIT="${CDX_HUD_NETWORK_IDLE_EXIT:-1800}"
+
+# stat(1) mtime flag — BSD/macOS uses -f %m, GNU uses -c %Y.
+if stat -f %m / >/dev/null 2>&1; then
+  STAT_MTIME_FMT="-f %m"
+elif stat -c %Y / >/dev/null 2>&1; then
+  STAT_MTIME_FMT="-c %Y"
+else
+  exit 1
+fi
+
+# Singleton via atomic link — same pattern as git-fetch-daemon. `set -C; echo`
+# looks atomic but leaves the file briefly empty between open() and write(),
+# which breaks stale-detection. Writing PID to a tempfile then `ln tmp pid`
+# makes the file observable only after it has content.
+acquire_lock() {
+  local tmp="$PID_FILE.tmp.$$"
+  echo "$$" > "$tmp"
+  if ln "$tmp" "$PID_FILE" 2>/dev/null; then
+    rm -f "$tmp"
+    return 0
+  fi
+  rm -f "$tmp"
+  local pid
+  pid=$(cat "$PID_FILE" 2>/dev/null)
+  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+    return 1
+  fi
+  # Stale (owner SIGKILL'd without trap cleanup). Reclaim.
+  rm -f "$PID_FILE"
+  echo "$$" > "$tmp"
+  if ln "$tmp" "$PID_FILE" 2>/dev/null; then
+    rm -f "$tmp"
+    return 0
+  fi
+  rm -f "$tmp"
+  return 1
+}
+acquire_lock || exit 0
+trap 'rm -f "$PID_FILE"' EXIT INT TERM HUP
+
+fail_count=0
+slow_count=0
+prev_state="online"
+reconnected_at=0
+
+write_state() {
+  local state="$1" latency="$2"
+  local tmp="$STATE_FILE.tmp"
+  cat > "$tmp" <<EOF
+STATE=$state
+LATENCY=$latency
+TIMESTAMP=$(date +%s)
+RECONNECTED_AT=$reconnected_at
+EOF
+  mv -f "$tmp" "$STATE_FILE"
+}
+
+while true; do
+  ping_output=$(ping -c1 -W "$PING_TIMEOUT" "$PING_TARGET" 2>/dev/null)
+  ping_exit=$?
+
+  latency=-1
+  if [ "$ping_exit" -eq 0 ]; then
+    # Pull avg RTT from the summary line: "round-trip min/avg/max/stddev = 12.3/14.5/16.7/1.2 ms".
+    latency=$(printf '%s\n' "$ping_output" \
+      | grep -oE 'round-trip.*= [0-9.]+/([0-9.]+)' \
+      | grep -oE '/[0-9.]+' | head -1 | tr -d '/' | cut -d. -f1)
+    [ -z "$latency" ] && latency=-1
+  fi
+
+  if [ "$ping_exit" -ne 0 ] || [ "$latency" -eq -1 ]; then
+    fail_count=$((fail_count + 1))
+    slow_count=0
+    if [ "$fail_count" -ge "$OFFLINE_THRESHOLD" ]; then
+      state="offline"
+    else
+      state="$prev_state"
+    fi
+  else
+    fail_count=0
+    if [ "$prev_state" = "offline" ]; then
+      state="reconnected"
+      reconnected_at=$(date +%s)
+    elif [ "$prev_state" = "reconnected" ]; then
+      now=$(date +%s)
+      elapsed=$((now - reconnected_at))
+      if [ "$elapsed" -ge "$RECONNECTED_DURATION" ]; then
+        state="online"
+        reconnected_at=0
+      else
+        state="reconnected"
+      fi
+    else
+      if [ "$latency" -gt "$SLOW_THRESHOLD_MS" ]; then
+        slow_count=$((slow_count + 1))
+      else
+        slow_count=0
+      fi
+      if [ "$slow_count" -ge "$SLOW_THRESHOLD_COUNT" ]; then
+        state="slow"
+      else
+        state="online"
+      fi
+    fi
+  fi
+
+  write_state "$state" "$latency"
+  prev_state="$state"
+
+  # Idle-exit when the render has stopped touching the heartbeat.
+  if [ -f "$HEARTBEAT" ]; then
+    last=$(stat $STAT_MTIME_FMT "$HEARTBEAT" 2>/dev/null || echo 0)
+    age=$(( $(date +%s) - last ))
+    if [ "$age" -gt "$IDLE_EXIT" ]; then
+      exit 0
+    fi
+  fi
+
+  sleep "$INTERVAL"
+done
