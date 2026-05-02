@@ -441,14 +441,15 @@ extract_state() {
     | .rl_secondary_stale = (if .rl_secondary_currently_null == 1 and .rl_secondary_hit == 0 and (.rl_secondary_pct | length) > 0 then 1 else 0 end)
     # Loading state: wipe per-session fields so we never display the prior
     # session as if it were the current one. Rate-limit fields stay (account-wide).
+    # meta_cwd / turn_cwd both wiped — bash falls back to CDX_HUD_LAUNCH_CWD.
     | (if $loading == 1 then
-         .meta_id = "" | .tok_ctx = 0 | .tok_session_total = 0
+         .meta_id = "" | .meta_cwd = "" | .tok_ctx = 0 | .tok_session_total = 0
          | .turn_model = "" | .turn_effort = "" | .turn_cwd = ""
          | .turn_approval = "" | .turn_sandbox = ""
        elif ($active_id // "") != "" and .meta_id != $active_id then
          # Wrapper detected a session id different from the last we saw events
          # for — zero per-session fields rather than show stale numbers.
-         .meta_id = $active_id | .tok_ctx = 0 | .tok_session_total = 0
+         .meta_id = $active_id | .meta_cwd = "" | .tok_ctx = 0 | .tok_session_total = 0
          | .turn_model = "" | .turn_effort = "" | .turn_cwd = ""
          | .turn_approval = "" | .turn_sandbox = ""
        else . end)
